@@ -12,8 +12,8 @@ if not DATABASE_URL:
 if not DATABASE_URL.startswith("postgresql+asyncpg://"):
     raise RuntimeError("DATABASE_URL must use the postgresql+asyncpg driver")
 
-PUBLIC_KEY_PATH = BASE_DIR / "src" / "certs" / "public_key.pem"
-PRIVATE_KEY_PATH = BASE_DIR / "src" / "certs" / "private_key.pem"
+PUBLIC_KEY_PATH = BASE_DIR / "certs" / "public_key.pem"
+PRIVATE_KEY_PATH = BASE_DIR / "certs" / "private_key.pem"
 
 TOKEN_EXPIRATION_MINUTES = int(getenv("TOKEN_EXPIRATION_MINUTES", "15"))
 if TOKEN_EXPIRATION_MINUTES <= 0:

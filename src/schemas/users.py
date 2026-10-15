@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, EmailStr, StringConstraints
 
-from src.models.common import InputModel, PatchModel, ReadModel
+from src.schemas.common import InputModel, PatchModel, ReadModel
 
 
 def validate_password_length(value: str) -> str:

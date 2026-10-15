@@ -7,11 +7,23 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 
-def main() -> None:
-    directory = Path(__file__).resolve().parents[1] / "src" / "certs"
+def generate_keys(directory: Path) -> None:
     private_path = directory / "private_key.pem"
     public_path = directory / "public_key.pem"
     if private_path.exists() and public_path.exists():
+        try:
+            private_key = serialization.load_pem_private_key(
+                private_path.read_bytes(), password=None
+            )
+            public_key = serialization.load_pem_public_key(public_path.read_bytes())
+        except (TypeError, ValueError) as exc:
+            raise SystemExit("Existing JWT keys are invalid; kept unchanged.") from exc
+        if (
+            not isinstance(private_key, rsa.RSAPrivateKey)
+            or not isinstance(public_key, rsa.RSAPublicKey)
+            or private_key.public_key().public_numbers() != public_key.public_numbers()
+        ):
+            raise SystemExit("Existing JWT keys do not form an RSA pair; kept unchanged.")
         print("JWT keys already exist; kept unchanged.")
         return
     if private_path.exists() or public_path.exists():
@@ -32,7 +44,11 @@ def main() -> None:
         stream.write(private_bytes)
     with public_path.open("xb") as stream:
         stream.write(public_bytes)
-    print("Created src/certs/private_key.pem and src/certs/public_key.pem.")
+    print(f"Created {private_path} and {public_path}.")
+
+
+def main() -> None:
+    generate_keys(Path(__file__).resolve().parents[1] / "certs")
 
 
 if __name__ == "__main__":

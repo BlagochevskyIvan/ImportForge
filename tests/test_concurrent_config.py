@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.db import config_crud, supplier_crud, user_crud
 from src.db.models import ImportConfig
-from src.models.config import CsvConfig
-from src.models.suppliers import SupplierCreate
-from src.models.user import UserCreate
+from src.schemas.import_config import CsvConfig
+from src.schemas.suppliers import SupplierCreate
+from src.schemas.users import UserCreate
 from tests.conftest import alembic_command, temporary_database
 
 pytestmark = pytest.mark.integration

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import ImportConfig, Supplier
 from src.db.supplier_crud import get_supplier_by_id
-from src.models.config import CsvConfig
+from src.schemas.import_config import CsvConfig
 
 
 async def get_config(

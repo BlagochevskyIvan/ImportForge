@@ -3,9 +3,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from src.api.routers.suppliers import router as suppliers_router
+from src.api.routers.users import router as user_router
 from src.db.database import engine
-from src.routers.suppliers import router as suppliers_router
-from src.routers.user import router as user_router
 
 
 @asynccontextmanager

@@ -8,10 +8,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 
-from src.auth import dependencies, utils_jwt
+from src.api import dependencies
+from src.api.routers import suppliers
+from src.auth import jwt as auth_jwt
 from src.db.models import User
 from src.main import app
-from src.routers import suppliers
 from tests.conftest import isolated_sessions
 
 pytestmark = pytest.mark.integration
@@ -26,7 +27,7 @@ def signing_key(tmp_path, monkeypatch):
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         )
     )
-    monkeypatch.setattr(utils_jwt, "PUBLIC_KEY_PATH", public_key_path)
+    monkeypatch.setattr(auth_jwt, "PUBLIC_KEY_PATH", public_key_path)
     return key
 
 
@@ -127,6 +128,7 @@ def test_supplier_authentication(database_url, monkeypatch, signing_key):
                     ("POST", "/suppliers", {"name": "S", "contact_email": "s@example.com"}),
                     ("GET", "/suppliers/1", None),
                     ("PATCH", "/suppliers/1", {"name": "Changed"}),
+                    ("GET", "/users/me", None),
                 ]:
                     response = await client.request(method, path, json=body, headers=headers)
                     assert response.status_code == 401, response.text

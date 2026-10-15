@@ -2,14 +2,14 @@ from asyncio import to_thread
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import IntegrityError
 
+from src.api.dependencies import get_current_user
+from src.auth.jwt import encode_jwt
 from src.auth.passwords import validate_password
-from src.auth.utils_jwt import decode_jwt, encode_jwt
 from src.db.database import get_session
-from src.db.user_crud import create_user, get_user_by_email, get_user_by_id
-from src.models.user import LoginRequest, LoginResponse, UserCreate, UserRead
+from src.db.user_crud import create_user, get_user_by_email
+from src.schemas.users import LoginRequest, LoginResponse, UserCreate, UserRead
 
 router = APIRouter()
 
@@ -41,11 +41,7 @@ async def login_user(login_request: LoginRequest):
     token = encode_jwt(payload)
     return LoginResponse(access_token=token, token_type="bearer")
 
+
 @router.get("/me", response_model=UserRead)
-async def read_me(credentials: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())]):
-    token = credentials.credentials
-    payload = decode_jwt(token)
-    user = await get_user_by_id(payload["sub"])
-    if user is None:
-        raise HTTPException(404, "User not found")
-    return UserRead
+async def read_me(current_user: Annotated[UserRead, Depends(get_current_user)]):
+    return current_user

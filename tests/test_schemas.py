@@ -4,9 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from src.db.models import User
-from src.models.config import CsvConfig, ImportConfigRead
-from src.models.suppliers import SupplierCreate, SupplierUpdate
-from src.models.user import UserCreate, UserRead, UserUpdate
+from src.schemas.import_config import CsvConfig, ImportConfigRead
+from src.schemas.suppliers import SupplierCreate, SupplierUpdate
+from src.schemas.users import UserCreate, UserRead, UserUpdate
 
 USER = {"username": "alice", "email": "Alice@Example.com", "password": "StrongPassword123"}
 MAPPING = {"Артикул": "sku", "Название": "name", "Цена": "price"}

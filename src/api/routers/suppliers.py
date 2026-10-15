@@ -2,11 +2,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.auth.dependencies import get_current_user
+from src.api.dependencies import get_current_user
 from src.db import supplier_crud
 from src.db.database import get_session
-from src.models.suppliers import SupplierCreate, SupplierRead, SupplierUpdate
-from src.models.user import UserRead
+from src.schemas.suppliers import SupplierCreate, SupplierRead, SupplierUpdate
+from src.schemas.users import UserRead
 
 router = APIRouter()
 

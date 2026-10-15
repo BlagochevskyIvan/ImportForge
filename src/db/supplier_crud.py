@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import Supplier
-from src.models.suppliers import SupplierCreate, SupplierUpdate
+from src.schemas.suppliers import SupplierCreate, SupplierUpdate
 
 
 async def get_supplier_by_id(

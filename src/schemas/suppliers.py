@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import EmailStr, StringConstraints
 
-from src.models.common import InputModel, PatchModel, ReadModel
+from src.schemas.common import InputModel, PatchModel, ReadModel
 
 SupplierName = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)

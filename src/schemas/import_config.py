@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, field_validator
 
-from src.models.common import InputModel, ReadModel
+from src.schemas.common import InputModel, ReadModel
 
 SourceColumn = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)

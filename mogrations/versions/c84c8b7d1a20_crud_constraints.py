@@ -5,9 +5,8 @@ Revises: b54de5027f26
 """
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "c84c8b7d1a20"
 down_revision = "b54de5027f26"

@@ -8,7 +8,7 @@ help:
 
 install:
 	$(PYTHON) -m venv .venv
-	$(VENV)/python -m pip install -r requirements-dev.txt
+	$(VENV)/python -m pip install -r requirements.txt
 
 env:
 	$(PYTHON) -c 'from pathlib import Path; p = Path(".env"); print(".env already exists; kept unchanged") if p.exists() else p.write_text(Path(".env.example").read_text())'

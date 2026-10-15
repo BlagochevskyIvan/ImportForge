@@ -7,9 +7,9 @@ from sqlalchemy.exc import IntegrityError
 from src.auth.passwords import validate_password
 from src.db import config_crud, supplier_crud, user_crud
 from src.db.models import ImportConfig
-from src.models.config import CsvConfig
-from src.models.suppliers import SupplierCreate, SupplierUpdate
-from src.models.user import UserCreate, UserRead, UserUpdate
+from src.schemas.import_config import CsvConfig
+from src.schemas.suppliers import SupplierCreate, SupplierUpdate
+from src.schemas.users import UserCreate, UserRead, UserUpdate
 from tests.conftest import isolated_sessions
 
 pytestmark = pytest.mark.integration

@@ -1,53 +1,167 @@
 # ImportForge
-Backend service for asynchronous CSV ingestion, validation, normalization.
 
-The project is organized as a modular monolith with ports and adapters inside
-each business module. See [Architecture](docs/architecture.md) for module
-boundaries, dependency rules, and the target request flows.
+Учебный backend для импорта CSV от поставщиков. Текущий этап — подготовка моделей,
+схем валидации и CRUD. PostgreSQL работает в Docker, Python — локально.
 
-## Local database setup
+## Что уже работает
 
-Run commands from the project root. PostgreSQL runs in Docker; Python runs locally.
+- Асинхронный SQLAlchemy и контекстный менеджер сессий.
+- Миграции Alembic: установка с пустой базы и обновление предыдущей версии проекта.
+- Схемы создания, обновления и ответа для пользователей, поставщиков и CSV-конфига.
+- CRUD с одной переданной сессией; проверка владельца поставщика и конфига.
+- Хеширование bcrypt; функции JWT RS256 с ограниченным временем жизни.
+- Ruff и тесты схем, паролей, CRUD и миграций на настоящем PostgreSQL.
+
+**HTTP-сценарий ещё не собран:** auth-роутер подключён в `src/main.py`
+с адресами `/auth/register` и `/auth/login`, но `get_current_user` ещё не написан.
+Обработчики поставщиков и конфигов пока содержат
+`pass` и возвращают `null`. Наличие этих путей в Swagger не означает готовый CRUD API.
+Маршрут `/` не объявлен, поэтому возвращает 404. Подключение HTTP-сценария оставлено
+следующим учебным этапом. Refresh/logout и CSV-обработка ещё не реализованы.
+
+## Первый запуск на macOS
+
+Команды выполняются из корня репозитория. Нужны Python 3.12+ и Docker Desktop;
+проверено на Python 3.14.2 и PostgreSQL 17.
 
 ```bash
-python3 -m venv .venv
+cd /Users/ivanblagocevskij/Programs/Projects/ImportForge
+open -a Docker
+make install
+make env
+make db-up
+make keys
+make migrate
+make migration-check
+make run
+```
+
+Перед `make db-up` дождись готовности Docker Desktop. `make install` создаёт `.venv`
+и устанавливает зависимости. Существующий `.env` команда `make env` не перезаписывает.
+`make keys` создаёт локальную RSA-пару в `src/certs/`, не заменяя существующие ключи.
+Приватный ключ получает права 600; каталог исключён из Git.
+
+В другом терминале проверь:
+
+```bash
+curl -f http://127.0.0.1:8000/openapi.json
+```
+
+Открой Swagger: <http://127.0.0.1:8000/docs>.
+На старте приложение выполняет `SELECT 1`; недоступная БД останавливает запуск.
+
+Без Makefile те же действия запуска приложения:
+
+```bash
 source .venv/bin/activate
-python -m pip install fastapi 'uvicorn[standard]' 'sqlalchemy[asyncio]>=2.0,<2.1' asyncpg python-dotenv
-```
-
-Configure the root `.env` file (local development values):
-
-```dotenv
-DB_USER=user
-DB_PASS=password
-DB_NAME=db
-DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}
-```
-
-```bash
+python -m pip install -r requirements-dev.txt
 docker compose up -d --wait postgres
-python -m src.db.database
-uvicorn src.main:app --reload
+python -m scripts.generate_keys
+python -m alembic upgrade head
+python -m alembic check
+python -m uvicorn src.main:app --reload
 ```
 
-`python -m src.db.database` creates missing tables from the existing SQLAlchemy
-models. It can be repeated, but does not alter existing tables or replace schema
-migrations. Alembic is not part of this setup. The API checks database connectivity
-on startup and closes its connection pool on shutdown.
+`requirements.txt` содержит прямые зависимости приложения, `requirements-dev.txt`
+добавляет инструменты разработки. Версии прямых зависимостей зафиксированы по
+проверенному окружению; это не полный lock-файл всех транзитивных зависимостей.
+Для запуска без инструментов разработки достаточно `pip install -r requirements.txt`.
 
-Verify the running API with `curl http://127.0.0.1:8000/` (expected response:
-`{"status":"ok"}`). Inspect the tables with:
+## Настройки
+
+Скопируй `.env.example` в `.env` через `make env` и при необходимости измени значения:
+
+| Переменная | Назначение |
+| --- | --- |
+| `DB_USER`, `DB_PASS`, `DB_NAME` | Первичная настройка PostgreSQL-контейнера |
+| `DATABASE_URL` | Соединение SQLAlchemy, обязательно `postgresql+asyncpg://...` |
+| `TOKEN_EXPIRATION_MINUTES` | Положительный срок access JWT в минутах, по умолчанию 15 |
+| `SQL_ECHO` | Вывод SQL; по умолчанию выключен, значения параметров скрыты |
+| `TEST_DATABASE_URL` | Отдельная тестовая база на порту 5433 |
+
+Пароли в примере предназначены для локальной разработки. Порты PostgreSQL привязаны
+к `127.0.0.1`. Изменение `DB_PASS` не меняет пароль в уже созданном Docker volume.
+Если пароль содержит специальные символы URL, закодируй их в `DATABASE_URL`.
+
+## Миграции
 
 ```bash
-docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\\dt"'
+make migrate
+make migration-check
+.venv/bin/python -m alembic current
 ```
 
-Use `get_session` from `src.db.database` as a FastAPI dependency. Each request gets
-its own session. Writes must explicitly commit with `await session.commit()` or
-use `async with session.begin():`. Closing a session rolls back uncommitted work.
-Do not share a session between concurrent tasks.
+Используй Alembic как единственный штатный способ менять структуру базы.
+`python -m src.db.database` теперь выводит подсказку использовать `make migrate`.
 
-If Python is later run inside this Compose network, use `postgres` instead of
-`localhost` in `DATABASE_URL`. PostgreSQL data persists in the `postgres_data`
-volume; the initial database credentials apply when that volume is first created.
-Stop PostgreSQL without removing its data using `docker compose stop postgres`.
+Ранее первая ревизия была пустой и предполагала вручную созданную таблицу suppliers.
+Теперь она создаёт эту исходную таблицу, поэтому вся цепочка работает с пустой БД.
+Для базы, уже отмеченной ревизией `b54de5027f26`, эта первая ревизия заново не выполняется.
+Новая ревизия `c84c8b7d1a20` добавляет типы, владельца и ограничения CRUD.
+
+Миграция не угадывает владельцев старых поставщиков: если в старой схеме есть
+поставщики или конфиги, она останавливается до изменений. В этом случае нужен
+отдельный план назначения владельцев и переноса конфигов. Не удаляй данные и не
+используй `alembic stamp head`, чтобы обойти это условие. Старые числовые Unix timestamp
+в `users.created_at` преобразуются в дату с часовым поясом; email нормализуется в нижний
+регистр. Конфликт email или некорректное время приводят к откату миграции.
+
+После нового изменения моделей:
+
+```bash
+.venv/bin/python -m alembic revision --autogenerate -m "describe schema change"
+# Сначала прочитай upgrade() и downgrade() в созданном файле.
+make migrate
+make migration-check
+```
+
+Для просмотра реальных таблиц:
+
+```bash
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt"'
+```
+
+## Форматирование и проверки
+
+```bash
+make lint
+make format
+make test-unit
+make test-db-up
+make test
+```
+
+- `make lint`: правила Ruff и проверка формата без изменения файлов.
+- `make format`: форматирование файлов, не исправление бизнес-логики.
+- `.venv/bin/ruff check . --fix`: исправления линтера, после которых нужно посмотреть diff.
+- `make test-unit`: схемы и пароли, без подключения к PostgreSQL.
+- `make test`: все проверки; отсутствие тестовой БД считается ошибкой, а не молчаливым пропуском.
+
+Тестовый PostgreSQL — отдельный сервис `postgres_test` с профилем `test`, портом 5433
+и временным хранилищем. Обычный `docker compose up -d` его не запускает.
+Тестовая база должна называться `test_...` и отличаться от рабочей. Тесты применяют
+реальные миграции. CRUD-тесты используют реальные SQL-запросы и откат внешней транзакции.
+
+```bash
+make test-db-stop
+make db-stop
+```
+
+Остановка рабочего PostgreSQL сохраняет его данные в volume. Данные тестового сервиса
+временные. Полный список команд: `make help`.
+
+## Где продолжать разработку
+
+| Каталог | Ответственность |
+| --- | --- |
+| `src/models/` | Pydantic: допустимые входные данные и публичные ответы |
+| `src/db/models.py` | SQLAlchemy: таблицы, типы, внешние ключи и ограничения |
+| `src/db/*_crud.py` | Чтение и изменение данных через переданную сессию |
+| `src/db/database.py` | Engine, фабрика сессий, `asynccontextmanager` |
+| `src/auth/` | Хеширование и JWT-функции |
+| `src/routers/` | Следующий этап: HTTP, зависимости и преобразование ошибок |
+| `src/alembic/` | Версионирование схемы БД |
+| `tests/` | Проверки контрактов и работы PostgreSQL |
+
+Подробное объяснение решений, примеры вызова каждой группы CRUD и план подключения
+роутеров: [Как устроен подготовленный каркас](docs/backend_basics.md).

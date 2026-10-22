@@ -18,4 +18,17 @@ PRIVATE_KEY_PATH = BASE_DIR / "certs" / "private_key.pem"
 TOKEN_EXPIRATION_MINUTES = int(getenv("TOKEN_EXPIRATION_MINUTES", "15"))
 if TOKEN_EXPIRATION_MINUTES <= 0:
     raise RuntimeError("TOKEN_EXPIRATION_MINUTES must be positive")
+
+REFRESH_TOKEN_EXPIRATION_DAYS = int(getenv("REFRESH_TOKEN_EXPIRATION_DAYS", "7"))
+if REFRESH_TOKEN_EXPIRATION_DAYS <= 0:
+    raise RuntimeError("REFRESH_TOKEN_EXPIRATION_DAYS must be positive")
+REFRESH_COOKIE_SECURE = getenv("REFRESH_COOKIE_SECURE", "false").lower() == "true"
+AUTH_ALLOWED_ORIGINS = {
+    origin.strip().rstrip("/")
+    for origin in getenv(
+        "AUTH_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",")
+    if origin.strip()
+}
 SQL_ECHO = getenv("SQL_ECHO", "false").lower() == "true"

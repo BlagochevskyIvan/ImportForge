@@ -105,3 +105,32 @@ def test_legacy_suppliers_stop_migration_without_data_loss(database_url):
                 await connection.close()
 
     asyncio.run(scenario())
+
+
+def test_refresh_expiry_conversion_preserves_existing_session(database_url):
+    async def scenario():
+        async with temporary_database(database_url) as url:
+            assert_migration_ok(url, "upgrade", "50f66e3c7ef9")
+            connection = await connect(url)
+            try:
+                user_id = await connection.fetchval(
+                    "INSERT INTO users (username, email, password_hash, ref_hash, exp_time) "
+                    "VALUES ('refresh', 'refresh@example.com', 'password-hash', "
+                    "'refresh-hash', '2030-01-02T03:04:05+03:00') RETURNING id"
+                )
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+            connection = await connect(url)
+            try:
+                user = await connection.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+                assert user["ref_hash"] == "refresh-hash"
+                assert user["exp_time"].isoformat() == "2030-01-02T00:04:05+00:00"
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "downgrade", "50f66e3c7ef9")
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+
+    asyncio.run(scenario())

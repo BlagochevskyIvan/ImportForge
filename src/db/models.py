@@ -14,6 +14,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    ref_hash = Column(String, nullable=True, unique=True, index=True)
+    exp_time = Column(DateTime(timezone=True), nullable=True)
 
 
 class Supplier(Base):

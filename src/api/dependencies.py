@@ -15,7 +15,6 @@ bearer = HTTPBearer(auto_error=False)
 
 
 def require_auth_origin(request: Request) -> None:
-    """Protect cookie auth against cross-origin browser requests; allow CLI clients."""
     origin = request.headers.get("origin")
     if origin is None and (referer := request.headers.get("referer")):
         try:

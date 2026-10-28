@@ -10,7 +10,7 @@ from src.auth.jwt import encode_jwt
 from src.auth.passwords import validate_password
 from src.auth.refresh import generate_refresh_token, hash_refresh_token
 from src.core.config import REFRESH_COOKIE_SECURE, REFRESH_TOKEN_EXPIRATION_DAYS
-from src.db import refresh_crud
+from src.db.refresh_crud import save_refresh_token, rotate_refresh_token, revoke_refresh_token
 from src.db.database import get_session
 from src.db.user_crud import create_user, get_user_by_email
 from src.schemas.users import LoginRequest, LoginResponse, UserCreate, UserRead
@@ -61,7 +61,7 @@ async def login_user(login_request: LoginRequest, response: Response):
         token = encode_jwt({"sub": str(user.id)})
         refresh_token = generate_refresh_token()
         expires_at = datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_EXPIRATION_DAYS)
-        saved = await refresh_crud.save_refresh_token(
+        saved = await save_refresh_token(
             session, user.id, hash_refresh_token(refresh_token), expires_at
         )
         if not saved:
@@ -84,7 +84,7 @@ async def refresh_user(
     new_refresh_token = generate_refresh_token()
     expires_at = datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_EXPIRATION_DAYS)
     async with get_session() as session, session.begin():
-        user_id = await refresh_crud.rotate_refresh_token(
+        user_id = await rotate_refresh_token(
             session,
             hash_refresh_token(refresh_token),
             hash_refresh_token(new_refresh_token),
@@ -102,7 +102,7 @@ async def logout_user(
 ) -> Response:
     if refresh_token:
         async with get_session() as session, session.begin():
-            await refresh_crud.revoke_refresh_token(session, hash_refresh_token(refresh_token))
+            await revoke_refresh_token(session, hash_refresh_token(refresh_token))
     response = Response(status_code=204, headers={"Cache-Control": "no-store"})
     response.delete_cookie(
         "refresh_token", path="/", httponly=True, secure=REFRESH_COOKIE_SECURE, samesite="lax"

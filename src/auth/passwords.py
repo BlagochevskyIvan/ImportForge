@@ -1,5 +1,3 @@
-"""Password helpers do not need JWT keys or a database connection."""
-
 import bcrypt
 
 

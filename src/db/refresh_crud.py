@@ -1,5 +1,3 @@
-"""One refresh session per user. The caller owns the transaction and commit."""
-
 from datetime import datetime
 
 from sqlalchemy import func, update
@@ -23,8 +21,6 @@ async def save_refresh_token(
 async def rotate_refresh_token(
     session: AsyncSession, old_hash: str, new_hash: str, expires_at: datetime
 ) -> int | None:
-    # PostgreSQL rechecks the WHERE condition after a concurrent updater commits.
-    # Exactly one request can replace a particular old hash.
     statement = (
         update(User)
         .where(

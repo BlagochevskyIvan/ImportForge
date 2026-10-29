@@ -1,36 +1,105 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ImportForge — фронтенд
 
-## Getting Started
+Next.js 16.4.2 (App Router), React 19.3.0, TypeScript. Только встроенные React Hooks, fetch и обычный CSS внутри `components/Styles.tsx`. Tailwind и его loader удалены; новые библиотеки не добавлялись.
 
-First, run the development server:
+## Запуск
+
+Нужен Node.js 20.9+ и работающий FastAPI с PostgreSQL. Не запускайте Next.js как статический экспорт: прокси `/api` требует сервера Next.js.
+
+В корне репозитория, при первом запуске:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+make install
+make env
+make db-up
+make keys
+make migrate
+make run
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`make env` сохраняет существующий `.env`, `make keys` сохраняет существующие ключи. Проверьте настройки базы в `.env`; для `make db-up` нужен запущенный Docker. Эти команды относятся к обычной базе разработки, а не к временной QA-базе из проверки ниже.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Во втором терминале:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cd /Users/ivanblagocevskij/Programs/Projects/ImportForge/src/web
+npm ci
+npm run dev
+```
 
-## Learn More
+Откройте [ImportForge](http://localhost:3000). Для другого адреса API задайте `API_BASE_URL` в `src/web/.env.local` по примеру `.env.example`, без завершающего `/`. Перезапустите Next.js после изменения; для production пересоберите приложение.
 
-To learn more about Next.js, take a look at the following resources:
+`API_BASE_URL` читает серверная конфигурация Next.js, клиент вызывает относительный `/api/...`. Бэкенд должен разрешать фактический адрес фронтенда в `AUTH_ALLOWED_ORIGINS`. По умолчанию разрешены localhost и 127.0.0.1 на порту 3000. Если Next.js выбрал порт 3001, добавьте его origin в настройки FastAPI и перезапустите FastAPI либо освободите порт 3000. Не смешивайте localhost и 127.0.0.1 во время работы: это разные хосты для cookie.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Для production:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run build
+npm run start
+```
 
-## Deploy on Vercel
+На HTTPS установите `REFRESH_COOKIE_SECURE=true` в конфигурации FastAPI и точный frontend origin в `AUTH_ALLOWED_ORIGINS`. В контейнере `API_BASE_URL` должен указывать на доступный Next.js адрес FastAPI, обычно имя сервиса, а не loopback чужого контейнера.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Экраны и код
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| URL | Файл | Поведение |
+| --- | --- | --- |
+| `/` | `app/page.tsx` | Стартовый экран и ссылки |
+| `/login` | `app/login/page.tsx` | Email, пароль, вход; query `registered=1` показывает уведомление |
+| `/register` | `app/register/page.tsx` | Username, email, пароль; после 201 переход ко входу |
+| `/dashboard` | `app/dashboard/page.tsx` | Профиль, выход, форма и список поставщиков с пагинацией |
+
+Страницы и layout — Server Components. Состояние полей, события и загрузка персональных данных находятся в Client Components. Условие `use client` описывает границу модулей, а не запрет начального HTML-рендеринга на сервере.
+
+- `components/AuthForm.tsx` — контролируемая форма для входа/регистрации, базовая валидация и ошибки.
+- `components/Dashboard.tsx` — проверка сессии, загрузка списка и управление формой. При смене пользователя Workspace пересоздаётся через key.
+- `components/SupplierForm.tsx` — POST и callback `onCreated`; `SupplierList.tsx` — таблица и пустое состояние. На узком экране таблица прокручивается внутри контейнера, контейнер доступен с клавиатуры.
+- `components/Header.tsx`, `AccountLink.tsx` — серверная навигация и маленькая клиентская ссылка по состоянию сессии.
+- `hooks/useAuth.tsx` — Context/Provider с профилем и восстановлением сессии.
+- `lib/api.tsx` — DTO, fetch, HTTP-ошибки, обновление токена и конечный повтор при 401.
+- `components/Styles.tsx` — обычный `<style>` с CSS и media queries, без CSS-in-JS библиотеки.
+- `next.config.ts` — прокси к существующему FastAPI. Это служебное исключение из правила `.tsx`, как и генерируемый `next-env.d.ts`.
+
+Полная учебная памятка с реальными примерами, порядком чтения файлов, разбором каждого экрана, рассказом о проекте и 20 вопросами: [docs/nextjs-interview-notes.md](../../docs/nextjs-interview-notes.md).
+
+## Сессия и ограничения
+
+Access JWT хранится только в памяти вкладки. Refresh хранит браузер в HttpOnly cookie, которую уже выдаёт FastAPI. При загрузке: refresh → /me → профиль в Context. Защищённые запросы передают Bearer JWT, а при 401 пробуют один refresh и один повтор. Одновременные запросы внутри вкладки используют один Promise; вкладки с Web Locks последовательно меняют refresh cookie. BroadcastChannel уведомляет о входе/выходе, без передачи токенов.
+
+Если Web Locks или BroadcastChannel отсутствуют, внутривкладочная логика и проверки API остаются, но межвкладочная координация ограничена. Web Locks требует подходящего secure context, в том числе работает на loopback. Клиентский редирект не является серверной защитой: FastAPI проверяет JWT, активность и владельца при каждом защищённом запросе. В HTML Dashboard нет персональных данных.
+
+Logout отзывает refresh, но выпущенный access JWT остаётся действителен до exp — это свойство текущего бэкенда. Ошибка сети при logout отображается как неподтверждённый выход; клиент не обещает отзыв серверной сессии. HttpOnly не устраняет XSS, только закрывает прямое чтение cookie JavaScript-кодом.
+
+Список использует offset/limit и сортировку API по ID: на странице 20 записей, запрос 21-й определяет наличие следующей страницы. После создания обновляется первая страница, новая запись может оказаться на следующей. Автоповтора POST при сетевом сбое нет: нельзя исключить, что сервер уже записал поставщика.
+
+Импорты CSV и конфигурации преобразований пока не входят в эти экраны. Незавершённые backend-эндпоинты конфигурации не используются. Бэкенд и его контракты при этой работе не менялись.
+
+## Проверка
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+Проверено 29 октября 2026 года:
+
+- Чистая установка `npm ci --offline --ignore-scripts`, ESLint, TypeScript и production build прошли. `npm run start` успешно запустил собранное приложение. Установка показала предупреждение о поддержке уже существующего ESLint 9; обновление инструментов отдельно не выполнялось.
+- Все четыре маршрута вернули 200. Dashboard возвращает безопасную оболочку, затем перенаправляет неавторизованного пользователя в браузере. `/login` динамический из-за серверного чтения searchParams; остальные три страницы пререндерены.
+- Через production Next.js → реальный FastAPI → PostgreSQL проверены регистрация, 409, неверный пароль 401, вход, HttpOnly cookie, /me, создание/список поставщиков, ротация refresh и выход. Браузером также проверены F5, истечение access JWT, вход/выход в двух вкладках, ошибки формы 422, пагинация 20 + 1, недоступный API и успешный повтор после восстановления.
+- Проверены старт, формы и кабинет на узком экране, в том числе 390 px; desktop — 1280 px. Горизонтальная прокрутка таблицы остаётся внутри её контейнера. Ошибка сети не повторяет POST автоматически.
+- 80 существующих тестов бэкенда прошли за 16.64 с. Дополнительно прошли 7 сценариев временного Node-harness для клиента, в том числе 20 конкурентных refresh-вызовов. Подробности — раздел 13 памятки.
+- В runtime-зависимостях только next/react/react-dom. Zod остаётся транзитивной **dev**-зависимостью штатного eslint-plugin-react-hooks; приложение его не импортирует и для валидации не использует. Tailwind отсутствует в package.json, lockfile и коде.
+
+Docker daemon недоступен, поэтому QA использовала отдельный Homebrew PostgreSQL 18.3 на 127.0.0.1:55432 и временную базу. Compose с PostgreSQL 17 в этой проверке не запускался. Пользовательская база и `.env` не менялись. Временные серверы после проверки остановлены. Production-деплой, нагрузочные и полноценные security-проверки не выполнялись.
+
+Ручной сценарий для повторения:
+
+1. Открыть `/dashboard` без cookie — получить экран входа.
+2. Зарегистрировать уникальные username/email, увидеть подтверждение на `/login`.
+3. Проверить неверный пароль, затем войти с правильным.
+4. Создать поставщика, проверить сообщение и список. `qa@localhost` проходит HTML-проверку, но вызывает 422 Pydantic — поле ошибки должно быть видно.
+5. Перезагрузить страницу, проверить восстановление профиля и списка.
+6. Открыть вторую вкладку, проверить общий вход/выход. При 21 поставщике проверить «Далее» и «Назад».
+7. Выключить FastAPI, обновить список: должна появиться ошибка и кнопка повтора. Запустить FastAPI и повторить запрос.
+8. Выйти и снова открыть `/dashboard`: должен открыться вход. На 390 px ширины проверить формы и прокрутку таблицы.

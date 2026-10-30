@@ -32,6 +32,7 @@ def test_clean_install_schema_check_and_empty_roundtrip(database_url):
                     "users",
                     "suppliers",
                     "import_configs",
+                    "source_files",
                     "alembic_version",
                 }
             finally:
@@ -132,5 +133,33 @@ def test_refresh_expiry_conversion_preserves_existing_session(database_url):
             assert_migration_ok(url, "downgrade", "50f66e3c7ef9")
             assert_migration_ok(url, "upgrade", "head")
             assert_migration_ok(url, "check")
+
+    asyncio.run(scenario())
+
+
+def test_legacy_upload_survives_supplier_binding(database_url):
+    async def scenario():
+        async with temporary_database(database_url) as url:
+            assert_migration_ok(url, "upgrade", "47770e44ab25")
+            connection = await connect(url)
+            try:
+                await connection.execute(
+                    "INSERT INTO source_files (id, filename, object_key, status) "
+                    "VALUES ('11111111-1111-1111-1111-111111111111', 'legacy.csv', 'raw/legacy.csv', 'uploaded')"
+                )
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+            connection = await connect(url)
+            try:
+                record = await connection.fetchrow("SELECT * FROM source_files")
+                assert record["filename"] == "legacy.csv"
+                assert record["supplier_id"] is None
+                assert record["config_data"] is None
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "downgrade", "47770e44ab25")
+            assert_migration_ok(url, "upgrade", "head")
 
     asyncio.run(scenario())

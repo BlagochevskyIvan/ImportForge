@@ -67,13 +67,3 @@ async def update_supplier(
             raise HTTPException(404, "Supplier not found")
         result = SupplierRead.model_validate(supplier)
     return result
-
-
-@router.post("/suppliers/{id}/config")
-async def create_supplier_config(id: int):
-    pass
-
-
-@router.get("/suppliers/{id}/config")
-async def get_supplier_config(id: int):
-    pass

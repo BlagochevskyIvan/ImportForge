@@ -1,6 +1,9 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, func, text
+from datetime import datetime
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Uuid, func, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 
 Base = declarative_base()
 
@@ -42,3 +45,36 @@ class ImportConfig(Base):
         index=True,
     )
     config_data = Column(JSONB, nullable=False)
+
+
+class SourceFile(Base):
+    __tablename__ = "source_files"
+
+    # Nullable only for files uploaded before supplier binding was introduced.
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="RESTRICT"), index=True
+    )
+    config_data: Mapped[dict | None] = mapped_column(JSONB)
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    filename: Mapped[str] = mapped_column(String(255))
+
+    object_key: Mapped[str] = mapped_column(
+        String(512),
+        unique=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="uploaded",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )

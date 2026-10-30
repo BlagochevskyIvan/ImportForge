@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 
 from src.api import dependencies
-from src.api.routers import suppliers
+from src.api.routers import import_config, suppliers
 from src.auth import jwt as auth_jwt
 from src.db.models import User
 from src.main import app
@@ -42,6 +42,7 @@ async def authenticated_client(database_url, monkeypatch, signing_key):
 
         monkeypatch.setattr(dependencies, "get_session", get_test_session)
         monkeypatch.setattr(suppliers, "get_session", get_test_session)
+        monkeypatch.setattr(import_config, "get_session", get_test_session)
 
         async with sessions() as session, session.begin():
             owner = User(username="owner", email="owner@example.com", password_hash="unused")

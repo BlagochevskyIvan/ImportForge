@@ -12,6 +12,13 @@ export interface Credentials { email: string; password: string }
 export interface Registration extends Credentials { username: string }
 export interface SupplierInput { name: string; contact_email: string }
 export interface Supplier extends SupplierInput { id: number; user_id: number; is_active: boolean }
+export interface CsvConfig {
+  delimiter: string;
+  encoding: "utf-8" | "utf-8-sig" | "cp1251";
+  column_mapping: Record<string, "sku" | "name" | "price">;
+}
+export interface ImportConfig { id: number; supplier_id: number; config_data: CsvConfig }
+export interface SourceFile { id: string; supplier_id: number; filename: string; status: "uploaded" }
 interface TokenResponse { access_token: string; token_type: "bearer" }
 
 export class ApiError extends Error {
@@ -28,10 +35,26 @@ const messages: Record<string, string> = {
   "Invalid or expired refresh token": "Сессия завершилась. Войдите снова.",
   "Invalid authentication credentials": "Войдите в аккаунт для продолжения.",
   "Untrusted authentication origin": "Адрес фронтенда отсутствует в AUTH_ALLOWED_ORIGINS бэкенда.",
+  "Supplier not found": "Поставщик не найден или недоступен.",
+  "Save supplier configuration before uploading": "Сначала сохраните конфиг поставщика.",
+  "Expected a CSV file": "Выберите файл с расширением .csv.",
+  "File is too large": "Размер CSV не должен превышать 20 МиБ.",
+  "File is empty": "Выбранный файл пуст.",
+  "Filename is too long": "Имя файла должно содержать не больше 255 символов.",
+  "File storage unavailable": "Хранилище файлов недоступно. Повторите загрузку позже.",
+  "File storage is not configured": "Хранилище файлов ещё не настроено на сервере.",
+  "Failed to save file metadata": "Не удалось сохранить сведения о файле. Повторите загрузку.",
 };
 const fieldNames: Record<string, string> = {
   username: "Имя пользователя", email: "Email", password: "Пароль",
   name: "Название", contact_email: "Контактный email",
+  delimiter: "Разделитель", encoding: "Кодировка", column_mapping: "Соответствие колонок",
+  supplier_id: "Поставщик", file: "Файл",
+};
+const validationMessages: Record<string, string> = {
+  "Value error, Map sku, name and price exactly once each": "Укажите три разные колонки для sku, name и price, каждую ровно один раз.",
+  "Value error, Delimiter cannot be a newline, NUL or quote": "Разделитель не может быть переносом строки, NUL или кавычкой.",
+  "Extra inputs are not permitted": "Неизвестный параметр.",
 };
 
 function errorMessage(body: unknown, status: number): string {
@@ -40,7 +63,8 @@ function errorMessage(body: unknown, status: number): string {
   if (Array.isArray(detail)) {
     return detail.map((item) => {
       const field = Array.isArray(item.loc) ? String(item.loc.at(-1)) : "Данные";
-      return `${fieldNames[field] || field}: ${String(item.msg || "проверьте значение")}`;
+      const message = String(item.msg || "проверьте значение");
+      return `${fieldNames[field] || field}: ${validationMessages[message] || message}`;
     }).join(". ");
   }
   return status >= 500
@@ -50,21 +74,27 @@ function errorMessage(body: unknown, status: number): string {
 
 async function request<T,>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
+  const multipart = options.body instanceof FormData;
+  const headers = new Headers(options.headers);
+  if (options.body && !multipart && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   try {
     response = await fetch(`/api${path}`, {
       ...options,
       credentials: "same-origin",
       cache: "no-store",
-      signal: AbortSignal.timeout(15000),
-      headers: { "Content-Type": "application/json", ...options.headers },
+      signal: options.signal ?? AbortSignal.timeout(multipart ? 120000 : 15000),
+      headers,
     });
   } catch {
     throw new ApiError(0, "Нет связи с сервером или время ожидания истекло. Проверьте подключение и повторите запрос.");
   }
   if (response.status === 204) return undefined as T;
-  const body: unknown = await response.json().catch(() => null);
+  let body: unknown;
+  try { body = await response.json(); }
+  catch { throw new ApiError(response.status >= 400 ? response.status : 502, "Сервер вернул неожиданный ответ."); }
   if (!response.ok) throw new ApiError(response.status, errorMessage(body, response.status));
-  if (body === null) throw new ApiError(502, "Сервер вернул неожиданный ответ.");
   return body as T;
 }
 
@@ -111,9 +141,11 @@ function refreshAccess(): Promise<string> {
 
 export async function authenticatedRequest<T,>(path: string, options: RequestInit = {}): Promise<T> {
   const token = accessToken || await refreshAccess();
-  const send = (value: string) => request<T>(path, {
-    ...options, headers: { ...options.headers, Authorization: `Bearer ${value}` },
-  });
+  const send = (value: string) => {
+    const headers = new Headers(options.headers);
+    headers.set("Authorization", `Bearer ${value}`);
+    return request<T>(path, { ...options, headers });
+  };
   try {
     return await send(token);
   } catch (error) {
@@ -165,6 +197,27 @@ export function listSuppliers(offset: number, limit: number) {
 
 export function createSupplier(data: SupplierInput) {
   return authenticatedRequest<Supplier>("/suppliers", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function getSupplier(id: number) {
+  return authenticatedRequest<Supplier>(`/suppliers/${id}`);
+}
+
+export function getSupplierConfig(id: number) {
+  return authenticatedRequest<ImportConfig | null>(`/suppliers/${id}/config`);
+}
+
+export function saveSupplierConfig(id: number, config: CsvConfig) {
+  return authenticatedRequest<ImportConfig>(`/suppliers/${id}/config`, {
+    method: "PUT", body: JSON.stringify({ config_data: config }),
+  });
+}
+
+export function uploadCsv(supplierId: number, file: File) {
+  const body = new FormData();
+  body.set("supplier_id", String(supplierId));
+  body.set("file", file);
+  return authenticatedRequest<SourceFile>("/imports", { method: "POST", body });
 }
 
 export function describeError(error: unknown): string {

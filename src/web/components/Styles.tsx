@@ -6,7 +6,7 @@ export default function Styles() {
     html { scroll-behavior:smooth; }
     body { margin:0; background:var(--paper); color:var(--ink); font-family:Arial,Helvetica,sans-serif; line-height:1.6; }
     a { color:var(--green); text-underline-offset:4px; }
-    button,input { font:inherit; }
+    button,input,select { font:inherit; }
     :focus-visible { outline:3px solid #739b38; outline-offset:4px; }
     button { cursor:pointer; }
     button:disabled { cursor:wait; opacity:.6; }
@@ -55,7 +55,15 @@ export default function Styles() {
     .card h2 { font-size:1.65rem; margin-bottom:10px; }
     .form { display:grid; gap:18px; }
     .field { display:grid; gap:6px; font-size:.9rem; font-weight:600; }
-    input { border:1px solid #c7d1c6; border-radius:6px; padding:11px 12px; background:white; width:100%; min-width:0; color:var(--ink); }
+    input,select { border:1px solid #c7d1c6; border-radius:6px; padding:11px 12px; background:white; width:100%; min-width:0; color:var(--ink); }
+    fieldset { border:0; margin:0; padding:0; min-width:0; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+    .back-link { display:inline-block; margin-bottom:28px; }
+    .supplier-workspace { display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:start; }
+    .supplier-workspace > * { min-width:0; }
+    .supplier-workspace .eyebrow { margin-bottom:16px; }
+    .config-options { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .selected-file { overflow-wrap:anywhere; margin:0; }
     input:hover { border-color:#8fa48c; }
     input:disabled { background:#f4f5f1; }
     .hint { color:var(--muted); font-size:.78rem; font-weight:400; }
@@ -83,6 +91,7 @@ export default function Styles() {
     .badge.inactive { background:#f2f0e9; color:#716b51; }
     .pagination { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:20px; font-size:.85rem; }
     @media(max-width:760px) {
+      .supplier-workspace,.config-options { grid-template-columns:1fr; }
       .container { width:calc(100% - 32px); }
       .header { min-height:76px; gap:12px; flex-wrap:wrap; padding:16px 0; }
       .nav { gap:12px; }

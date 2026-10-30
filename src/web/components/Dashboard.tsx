@@ -42,7 +42,7 @@ function Workspace({ user }: { user: User }) {
   function created(supplier: Supplier) {
     setShowForm(false);
     setSuccess(`Поставщик «${supplier.name}» создан.`);
-    reload(0);
+    router.push(`/suppliers/${supplier.id}`);
   }
 
   async function signOut() {
@@ -55,7 +55,7 @@ function Workspace({ user }: { user: User }) {
   }
 
   return <>
-    <div className="dashboard-title"><div><p className="eyebrow"><span className="dot" /> Личный кабинет</p><h1>Здравствуйте, {user.username}.</h1><p className="muted">Ваши поставщики и контакты в одном месте.</p></div><button className="button secondary small" type="button" onClick={signOut} disabled={loggingOut}>{loggingOut ? "Выходим…" : "Выйти"}</button></div>
+    <div className="dashboard-title"><div><p className="eyebrow"><span className="dot" /> Личный кабинет</p><h1>Здравствуйте, {user.username}.</h1><p className="muted">Выберите поставщика, настройте конфиг и загрузите CSV.</p></div><button className="button secondary small" type="button" onClick={signOut} disabled={loggingOut}>{loggingOut ? "Выходим…" : "Выйти"}</button></div>
     {logoutError && <p className="notice error" role="alert">Выход не подтверждён: {logoutError}</p>}
     <section aria-labelledby="suppliers-title">
       <div className="section-head"><h2 id="suppliers-title">Поставщики</h2><div className="actions"><button className="button secondary small" type="button" onClick={() => reload()} disabled={loading}>Обновить список</button><button className="button small" type="button" onClick={() => { setShowForm(true); setSuccess(null); }} disabled={showForm} aria-expanded={showForm} aria-controls="supplier-form">+ Создать поставщика</button></div></div>

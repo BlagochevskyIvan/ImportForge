@@ -14,7 +14,8 @@ from tests.conftest import alembic_command, temporary_database
 pytestmark = pytest.mark.integration
 
 
-def test_concurrent_saves_create_one_config(database_url):
+@pytest.mark.parametrize("create_only", [False, True])
+def test_concurrent_writes_create_one_config(database_url, create_only):
     async def scenario():
         async with temporary_database(database_url) as url:
             migration = alembic_command(url, "upgrade", "head")
@@ -38,23 +39,33 @@ def test_concurrent_saves_create_one_config(database_url):
                     )
                     user_id, supplier_id = user.id, supplier.id
 
-                async def save(delimiter):
-                    async with sessions() as session, session.begin():
-                        config = await config_crud.save_config(
-                            session,
-                            supplier_id,
-                            CsvConfig(
-                                delimiter=delimiter,
-                                column_mapping={"SKU": "sku", "Name": "name", "Price": "price"},
-                            ),
-                            user_id=user_id,
-                        )
-                        return config.id
+                write_config = config_crud.create_config if create_only else config_crud.save_config
 
-                ids = await asyncio.gather(save(","), save(";"), save("|"))
-                assert len(set(ids)) == 1
+                async def save(delimiter):
+                    try:
+                        async with sessions() as session, session.begin():
+                            config = await write_config(
+                                session,
+                                supplier_id,
+                                CsvConfig(
+                                    delimiter=delimiter,
+                                    column_mapping={"SKU": "sku", "Name": "name", "Price": "price"},
+                                ),
+                                user_id=user_id,
+                            )
+                            return config.id, delimiter
+                    except config_crud.ConfigAlreadyExistsError:
+                        return None
+
+                results = await asyncio.gather(save(","), save(";"), save("|"))
+                successful = [result for result in results if result is not None]
+                assert len(successful) == (1 if create_only else 3)
+                assert len({config_id for config_id, _ in successful}) == 1
                 async with sessions() as session:
                     assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 1
+                    if create_only:
+                        config = await config_crud.get_config(session, supplier_id, user_id=user_id)
+                        assert config.config_data["delimiter"] == successful[0][1]
             finally:
                 await engine.dispose()
 

@@ -13,6 +13,83 @@ CONFIG = {
 }
 
 
+def test_config_create_conflict_and_ownership(database_url, monkeypatch, signing_key):
+    async def scenario():
+        async with authenticated_client(database_url, monkeypatch, signing_key) as context:
+            client, ids, authorization = context
+            owner = authorization(ids["owner"])
+            other = authorization(ids["other"])
+            supplier = await client.post(
+                "/suppliers",
+                json={"name": "Create config", "contact_email": "s@example.com"},
+                headers=owner,
+            )
+            assert supplier.status_code == 201, supplier.text
+            path = f"/suppliers/{supplier.json()['id']}/config"
+            body = {"config_data": CONFIG}
+            for headers, expected in [({}, 401), (other, 404)]:
+                response = await client.post(path, headers=headers, json=body)
+                assert response.status_code == expected, response.text
+            missing = await client.post("/suppliers/-1/config", headers=owner, json=body)
+            assert missing.status_code == 404
+            invalid = await client.post(path, headers=owner, json={"config_data": {}})
+            assert invalid.status_code == 422
+            assert (await client.get(path, headers=owner)).json() is None
+
+            created = await client.post(path, headers=owner, json=body)
+            assert created.status_code == 201, created.text
+            assert created.json()["supplier_id"] == supplier.json()["id"]
+            assert created.json()["config_data"] == CONFIG
+            assert (await client.get(path, headers=owner)).json() == created.json()
+
+            changed = {"config_data": {**CONFIG, "delimiter": "|"}}
+            conflict = await client.post(path, headers=owner, json=changed)
+            assert conflict.status_code == 409, conflict.text
+            assert (await client.post(path, headers=other, json=changed)).status_code == 404
+            assert (await client.get(path, headers=owner)).json() == created.json()
+
+    asyncio.run(scenario())
+
+
+def test_config_delete_persists_and_allows_recreation(database_url, monkeypatch, signing_key):
+    async def scenario():
+        async with authenticated_client(database_url, monkeypatch, signing_key) as context:
+            client, ids, authorization = context
+            owner = authorization(ids["owner"])
+            other = authorization(ids["other"])
+            supplier = await client.post(
+                "/suppliers",
+                json={"name": "Delete config", "contact_email": "s@example.com"},
+                headers=owner,
+            )
+            assert supplier.status_code == 201, supplier.text
+            supplier_path = f"/suppliers/{supplier.json()['id']}"
+            path = f"{supplier_path}/config"
+            created = await client.post(path, headers=owner, json={"config_data": CONFIG})
+            assert created.status_code == 201, created.text
+
+            for headers, expected in [({}, 401), (other, 404)]:
+                response = await client.delete(path, headers=headers)
+                assert response.status_code == expected, response.text
+            assert (await client.delete("/suppliers/-1/config", headers=owner)).status_code == 404
+            assert (await client.get(path, headers=owner)).json() == created.json()
+
+            deleted = await client.delete(path, headers=owner)
+            assert deleted.status_code == 200, deleted.text
+            assert deleted.json() is True
+            empty = await client.get(path, headers=owner)
+            assert empty.status_code == 200 and empty.json() is None
+            assert (await client.get(supplier_path, headers=owner)).json() == supplier.json()
+            repeated = await client.delete(path, headers=owner)
+            assert repeated.status_code == 200 and repeated.json() is False
+
+            recreated = await client.post(path, headers=owner, json={"config_data": CONFIG})
+            assert recreated.status_code == 201, recreated.text
+            assert (await client.get(path, headers=owner)).json() == recreated.json()
+
+    asyncio.run(scenario())
+
+
 def test_config_save_replace_and_ownership(database_url, monkeypatch, signing_key):
     async def scenario():
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:

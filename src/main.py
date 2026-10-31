@@ -3,8 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from src.api.routers.files import router as import_router
 from src.api.routers.import_config import router as config_router
-from src.api.routers.imports import router as import_router
 from src.api.routers.suppliers import router as suppliers_router
 from src.api.routers.users import router as user_router
 from src.db.database import engine

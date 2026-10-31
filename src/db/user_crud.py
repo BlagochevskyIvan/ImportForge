@@ -1,5 +1,3 @@
-"""User persistence. The caller owns the session and commits the transaction."""
-
 from asyncio import to_thread
 
 from sqlalchemy import select

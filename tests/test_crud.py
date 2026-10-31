@@ -134,7 +134,7 @@ def test_supplier_ownership_updates_and_delete_rules(database_url):
     asyncio.run(scenario())
 
 
-def test_config_upsert_and_owner_checks(database_url):
+def test_config_versions_and_owner_checks(database_url):
     async def scenario():
         async with isolated_sessions(database_url) as sessions:
             async with sessions() as session, session.begin():
@@ -150,8 +150,9 @@ def test_config_upsert_and_owner_checks(database_url):
                 second = await config_crud.save_config(
                     session, supplier_id, config_data(";"), user_id=owner_id
                 )
-                assert second.id == config_id
+                assert second.id != config_id
                 assert second.config_data["delimiter"] == ";"
+                assert first.config_data["delimiter"] == ","
                 assert await config_crud.get_config(session, supplier_id, user_id=-1) is None
                 assert (
                     await config_crud.save_config(session, supplier_id, config_data(), user_id=-1)
@@ -159,16 +160,22 @@ def test_config_upsert_and_owner_checks(database_url):
                 )
                 assert not await config_crud.delete_config(session, supplier_id, user_id=-1)
             async with sessions() as session, session.begin():
-                assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 1
+                assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 2
+                assert (
+                    await session.get(ImportConfig, config_id)
+                ).config_data == config_data().model_dump()
                 config = await config_crud.get_config(session, supplier_id, user_id=owner_id)
+                assert config.id == second.id
                 assert config.config_data["delimiter"] == ";"
                 assert await config_crud.delete_config(session, supplier_id, user_id=owner_id)
+                assert await config_crud.get_config(session, supplier_id, user_id=owner_id) is None
                 assert not await config_crud.delete_config(session, supplier_id, user_id=owner_id)
+                assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 0
 
     asyncio.run(scenario())
 
 
-def test_config_foreign_key_and_unique_constraint(database_url):
+def test_config_foreign_key_and_multiple_versions(database_url):
     async def scenario():
         async with isolated_sessions(database_url) as sessions:
             with pytest.raises(IntegrityError):
@@ -182,9 +189,10 @@ def test_config_foreign_key_and_unique_constraint(database_url):
                 )
                 supplier_id = supplier.id
                 await config_crud.save_config(session, supplier_id, config_data(), user_id=user.id)
-            with pytest.raises(IntegrityError):
-                async with sessions() as session, session.begin():
-                    session.add(ImportConfig(supplier_id=supplier_id, config_data={}))
-                    await session.flush()
+            async with sessions() as session, session.begin():
+                session.add(ImportConfig(supplier_id=supplier_id, config_data={}))
+                await session.flush()
+            async with sessions() as session:
+                assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 2
 
     asyncio.run(scenario())

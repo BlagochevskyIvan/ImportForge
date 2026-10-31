@@ -63,6 +63,13 @@ export default function Styles() {
     .supplier-workspace > * { min-width:0; }
     .supplier-workspace .eyebrow { margin-bottom:16px; }
     .config-options { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .processing-section { margin-top:24px; }
+    .processing-list { display:grid; gap:20px; }
+    .processing-file { padding-top:20px; border-top:1px solid var(--line); overflow-wrap:anywhere; }
+    .processing-file .section-head { margin-bottom:8px; flex-wrap:wrap; }
+    .processing-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:20px 0; }
+    .processing-stats dt { font-size:.78rem; color:var(--muted); }
+    .processing-stats dd { margin:4px 0 0; font-size:1.35rem; font-weight:700; }
     .selected-file { overflow-wrap:anywhere; margin:0; }
     input:hover { border-color:#8fa48c; }
     input:disabled { background:#f4f5f1; }

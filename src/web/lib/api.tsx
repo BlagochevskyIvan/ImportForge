@@ -18,7 +18,14 @@ export interface CsvConfig {
   column_mapping: Record<string, "sku" | "name" | "price">;
 }
 export interface ImportConfig { id: number; supplier_id: number; config_data: CsvConfig }
-export interface SourceFile { id: string; supplier_id: number; filename: string; status: "uploaded" }
+export interface ProcessingResult { total_rows: number; successful_rows: number; failed_rows: number; error: string | null }
+export interface SourceFile {
+  id: string;
+  supplier_id: number;
+  filename: string;
+  status: "uploaded" | "processing" | "completed" | "failed";
+  processing_result: ProcessingResult | null;
+}
 interface TokenResponse { access_token: string; token_type: "bearer" }
 
 export class ApiError extends Error {
@@ -44,6 +51,10 @@ const messages: Record<string, string> = {
   "File storage unavailable": "Хранилище файлов недоступно. Повторите загрузку позже.",
   "File storage is not configured": "Хранилище файлов ещё не настроено на сервере.",
   "Failed to save file metadata": "Не удалось сохранить сведения о файле. Повторите загрузку.",
+  "File not found": "Файл не найден или недоступен.",
+  "File processing is already in progress": "Этот файл уже обрабатывается. Обновите список чуть позже.",
+  "Processing result is not ready": "Результат ещё не готов. Сначала обработайте файл.",
+  "Failed to save processing state": "Не удалось сохранить результат обработки. Обновите список файлов.",
 };
 const fieldNames: Record<string, string> = {
   username: "Имя пользователя", email: "Email", password: "Пароль",
@@ -72,7 +83,7 @@ function errorMessage(body: unknown, status: number): string {
     : `Не удалось выполнить запрос (HTTP ${status}).`;
 }
 
-async function request<T,>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T,>(path: string, options: RequestInit = {}, responseType: "json" | "blob" = "json"): Promise<T> {
   let response: Response;
   const multipart = options.body instanceof FormData;
   const headers = new Headers(options.headers);
@@ -91,6 +102,7 @@ async function request<T,>(path: string, options: RequestInit = {}): Promise<T> 
     throw new ApiError(0, "Нет связи с сервером или время ожидания истекло. Проверьте подключение и повторите запрос.");
   }
   if (response.status === 204) return undefined as T;
+  if (response.ok && responseType === "blob") return await response.blob() as T;
   let body: unknown;
   try { body = await response.json(); }
   catch { throw new ApiError(response.status >= 400 ? response.status : 502, "Сервер вернул неожиданный ответ."); }
@@ -139,12 +151,12 @@ function refreshAccess(): Promise<string> {
   return refreshPromise;
 }
 
-export async function authenticatedRequest<T,>(path: string, options: RequestInit = {}): Promise<T> {
+export async function authenticatedRequest<T,>(path: string, options: RequestInit = {}, responseType: "json" | "blob" = "json"): Promise<T> {
   const token = accessToken || await refreshAccess();
   const send = (value: string) => {
     const headers = new Headers(options.headers);
     headers.set("Authorization", `Bearer ${value}`);
-    return request<T>(path, { ...options, headers });
+    return request<T>(path, { ...options, headers }, responseType);
   };
   try {
     return await send(token);
@@ -218,6 +230,28 @@ export function uploadCsv(supplierId: number, file: File) {
   body.set("supplier_id", String(supplierId));
   body.set("file", file);
   return authenticatedRequest<SourceFile>("/imports", { method: "POST", body });
+}
+
+export function listFiles(supplierId: number, offset = 0, limit = 20) {
+  return authenticatedRequest<SourceFile[]>(`/imports?supplier_id=${supplierId}&offset=${offset}&limit=${limit}`);
+}
+
+export function processFile(fileId: string) {
+  return authenticatedRequest<SourceFile>(`/imports/${fileId}/process`, {
+    method: "POST", signal: AbortSignal.timeout(120000),
+  });
+}
+
+export async function downloadCsv(file: SourceFile, kind: "source" | "result" | "errors") {
+  const blob = await authenticatedRequest<Blob>(`/imports/${file.id}/download?kind=${kind}`, {
+    signal: AbortSignal.timeout(120000),
+  }, "blob");
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = kind === "source" ? file.filename : `${file.id}-${kind}.csv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function describeError(error: unknown): string {

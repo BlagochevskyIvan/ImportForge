@@ -7,8 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.routers import imports
-from src.db.models import SourceFile
+from src.api.routers import files
+from src.db.models import ImportConfig, SourceFile
 from tests.test_supplier_api import authenticated_client
 from tests.test_supplier_api import signing_key as signing_key
 from tests.test_supplier_config_api import CONFIG
@@ -32,6 +32,11 @@ class FileStorage:
         self.deleted.append(key)
         self.files.pop(key, None)
 
+    def download(self, key, fileobj):
+        if self.unavailable:
+            raise EndpointConnectionError(endpoint_url="http://storage.invalid")
+        fileobj.write(self.files[key])
+
 
 async def create_supplier(client, headers):
     response = await client.post(
@@ -43,40 +48,74 @@ async def create_supplier(client, headers):
     return response.json()["id"]
 
 
-def test_upload_binds_supplier_and_snapshots_config(database_url, monkeypatch, signing_key):
+@pytest.mark.parametrize("save_method", ["PUT", "POST"])
+def test_upload_binds_supplier_and_snapshots_config(
+    database_url, monkeypatch, signing_key, save_method
+):
     async def scenario():
         storage = FileStorage()
-        monkeypatch.setattr(imports, "get_storage", lambda: storage)
+        monkeypatch.setattr(files, "get_storage", lambda: storage)
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:
             from src.api.routers import suppliers
 
-            monkeypatch.setattr(imports, "get_session", suppliers.get_session)
+            monkeypatch.setattr(files, "get_session", suppliers.get_session)
             client, ids, authorization = context
             owner = authorization(ids["owner"])
             supplier_id = await create_supplier(client, owner)
             path = f"/suppliers/{supplier_id}/config"
-            await client.put(path, headers=owner, json={"config_data": CONFIG})
-            response = await client.post(
-                "/imports",
-                headers=owner,
-                data={"supplier_id": supplier_id},
-                files={"file": ("прайс.CSV", CSV, "text/csv")},
-            )
+            original = await client.put(path, headers=owner, json={"config_data": CONFIG})
+            assert original.status_code == 200, original.text
+
+            async def upload(content=CSV):
+                return await client.post(
+                    "/imports",
+                    headers=owner,
+                    data={"supplier_id": supplier_id},
+                    files={"file": ("прайс.CSV", content, "text/csv")},
+                )
+
+            response = await upload()
             assert response.status_code == 201, response.text
             result = response.json()
             assert result["supplier_id"] == supplier_id
             assert result["status"] == "uploaded"
             assert result["filename"] == "прайс.CSV"
-            async with imports.get_session() as session:
+            async with files.get_session() as session:
                 record = await session.get(SourceFile, UUID(result["id"]))
                 assert record.supplier_id == supplier_id
                 assert record.config_data == CONFIG
                 assert storage.files[record.object_key] == CSV
-            await client.put(
-                path, headers=owner, json={"config_data": {**CONFIG, "delimiter": ","}}
+            changed = {
+                "delimiter": "|",
+                "encoding": "utf-8",
+                "column_mapping": {"SKU": "sku", "Name": "name", "Price": "price"},
+            }
+            updated = await client.request(
+                save_method, path, headers=owner, json={"config_data": changed}
             )
-            async with imports.get_session() as session:
+            assert updated.status_code == (200 if save_method == "PUT" else 201), updated.text
+            assert updated.json()["id"] != original.json()["id"]
+            second = await upload(b"SKU|Name|Price\n2|Test|200\n")
+            assert second.status_code == 201, second.text
+            async with files.get_session() as session:
                 assert (await session.get(SourceFile, UUID(result["id"]))).config_data == CONFIG
+                assert (
+                    await session.get(SourceFile, UUID(second.json()["id"]))
+                ).config_data == changed
+                assert (
+                    await session.get(ImportConfig, original.json()["id"])
+                ).config_data == CONFIG
+
+            assert (await client.delete(path, headers=owner)).json() is True
+            assert (await client.get(path, headers=owner)).json() is None
+            assert (await upload()).status_code == 409
+            async with files.get_session() as session:
+                assert (await session.get(SourceFile, UUID(result["id"]))).config_data == CONFIG
+                assert (
+                    await session.get(SourceFile, UUID(second.json()["id"]))
+                ).config_data == changed
+                assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 0
+            assert len(storage.files) == 2
 
     asyncio.run(scenario())
 
@@ -86,11 +125,11 @@ def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
 ):
     async def scenario():
         storage = FileStorage()
-        monkeypatch.setattr(imports, "get_storage", lambda: storage)
+        monkeypatch.setattr(files, "get_storage", lambda: storage)
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:
             from src.api.routers import suppliers
 
-            monkeypatch.setattr(imports, "get_session", suppliers.get_session)
+            monkeypatch.setattr(files, "get_session", suppliers.get_session)
             client, ids, authorization = context
             owner = authorization(ids["owner"])
             supplier_id = await create_supplier(client, owner)
@@ -114,10 +153,10 @@ def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
             assert (await upload(owner, filename="price.txt")).status_code == 415
             assert (await upload(owner, content=b"")).status_code == 422
             assert (await upload(owner, filename="x" * 252 + ".csv")).status_code == 422
-            monkeypatch.setattr(imports, "MAX_FILE_SIZE", len(CSV) - 1)
+            monkeypatch.setattr(files, "MAX_FILE_SIZE", len(CSV) - 1)
             assert (await upload(owner)).status_code == 413
             assert storage.files == {}
-            async with imports.get_session() as session:
+            async with files.get_session() as session:
                 assert await session.scalar(select(func.count()).select_from(SourceFile)) == 0
 
     asyncio.run(scenario())
@@ -126,11 +165,11 @@ def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
 def test_upload_storage_failure_and_database_cleanup(database_url, monkeypatch, signing_key):
     async def scenario():
         storage = FileStorage()
-        monkeypatch.setattr(imports, "get_storage", lambda: storage)
+        monkeypatch.setattr(files, "get_storage", lambda: storage)
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:
             from src.api.routers import suppliers
 
-            monkeypatch.setattr(imports, "get_session", suppliers.get_session)
+            monkeypatch.setattr(files, "get_session", suppliers.get_session)
             client, ids, authorization = context
             owner = authorization(ids["owner"])
             supplier_id = await create_supplier(client, owner)
@@ -161,7 +200,7 @@ def test_upload_storage_failure_and_database_cleanup(database_url, monkeypatch, 
             assert (await upload()).status_code == 500
             assert len(storage.deleted) == 1
             assert storage.files == {}
-            async with imports.get_session() as session:
+            async with files.get_session() as session:
                 assert await session.scalar(select(func.count()).select_from(SourceFile)) == 0
 
     asyncio.run(scenario())

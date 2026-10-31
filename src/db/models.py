@@ -41,7 +41,6 @@ class ImportConfig(Base):
         Integer,
         ForeignKey("suppliers.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
         index=True,
     )
     config_data = Column(JSONB, nullable=False)
@@ -50,11 +49,13 @@ class ImportConfig(Base):
 class SourceFile(Base):
     __tablename__ = "source_files"
 
-    # Nullable only for files uploaded before supplier binding was introduced.
     supplier_id: Mapped[int | None] = mapped_column(
         ForeignKey("suppliers.id", ondelete="RESTRICT"), index=True
     )
     config_data: Mapped[dict | None] = mapped_column(JSONB)
+
+    # счётчики, ключи артефактов/описание ошибки
+    processing_result: Mapped[dict | None] = mapped_column(JSONB)
 
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),

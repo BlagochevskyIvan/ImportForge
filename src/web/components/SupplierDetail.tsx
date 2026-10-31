@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import CsvUpload from "@/components/CsvUpload";
+import CsvProcessing from "@/components/CsvProcessing";
 import SupplierConfigForm from "@/components/SupplierConfigForm";
 import { useAuth } from "@/hooks/useAuth";
 import { describeError, getSupplier, getSupplierConfig, type ImportConfig, type Supplier } from "@/lib/api";
@@ -14,6 +15,7 @@ function SupplierWorkspace({ supplierId }: { supplierId: number }) {
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [ready, setReady] = useState(false);
+  const [filesRevision, setFilesRevision] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -35,8 +37,9 @@ function SupplierWorkspace({ supplierId }: { supplierId: number }) {
     <div className="dashboard-title"><div><p className="eyebrow"><span className="dot" /> Поставщик · ID {data.supplier.id}</p><h1>{data.supplier.name}</h1><p className="muted">{data.supplier.contact_email}</p></div><span className={`badge${data.supplier.is_active ? "" : " inactive"}`}>{data.supplier.is_active ? "Активен" : "Неактивен"}</span></div>
     <div className="supplier-workspace">
       <SupplierConfigForm supplierId={supplierId} initialConfig={data.config} onReadyChange={setReady} />
-      <CsvUpload supplierId={supplierId} configReady={ready} />
+      <CsvUpload supplierId={supplierId} configReady={ready} onUploaded={() => setFilesRevision((value) => value + 1)} />
     </div>
+    <CsvProcessing supplierId={supplierId} revision={filesRevision} />
   </>;
 }
 

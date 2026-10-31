@@ -49,16 +49,13 @@ async def create_supplier_config(
     data: ImportConfigCreate,
     current_user: Annotated[UserRead, Depends(get_current_user)],
 ):
-    try:
-        async with get_session() as session, session.begin():
-            config = await config_crud.create_config(
-                session, supplier_id, data.config_data, user_id=current_user.id
-            )
-            if config is None:
-                raise HTTPException(404, "Supplier not found")
-            result = ImportConfigRead.model_validate(config)
-    except config_crud.ConfigAlreadyExistsError as exc:
-        raise HTTPException(409, "Supplier configuration already exists") from exc
+    async with get_session() as session, session.begin():
+        config = await config_crud.create_config(
+            session, supplier_id, data.config_data, user_id=current_user.id
+        )
+        if config is None:
+            raise HTTPException(404, "Supplier not found")
+        result = ImportConfigRead.model_validate(config)
     return result
 
 

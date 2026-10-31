@@ -163,3 +163,94 @@ def test_legacy_upload_survives_supplier_binding(database_url):
             assert_migration_ok(url, "upgrade", "head")
 
     asyncio.run(scenario())
+
+
+def test_config_version_migration_preserves_data_and_blocks_lossy_downgrade(database_url):
+    async def scenario():
+        async with temporary_database(database_url) as url:
+            assert_migration_ok(url, "upgrade", "d38f04e271ab")
+            connection = await connect(url)
+            try:
+                user_id = await connection.fetchval(
+                    "INSERT INTO users (username, email, password_hash) "
+                    "VALUES ('owner', 'owner@example.com', 'unused') RETURNING id"
+                )
+                supplier_id = await connection.fetchval(
+                    "INSERT INTO suppliers (user_id, name, contact_email) "
+                    "VALUES ($1, 'Supplier', 'supplier@example.com') RETURNING id",
+                    user_id,
+                )
+                original_id = await connection.fetchval(
+                    "INSERT INTO import_configs (supplier_id, config_data) "
+                    'VALUES ($1, \'{"delimiter": ";"}\') RETURNING id',
+                    supplier_id,
+                )
+                await connection.execute(
+                    "INSERT INTO source_files "
+                    "(id, supplier_id, config_data, filename, object_key, status) "
+                    "VALUES ('11111111-1111-1111-1111-111111111111', $1, "
+                    "'{\"delimiter\": \";\"}', 'price.csv', 'raw/price.csv', 'uploaded')",
+                    supplier_id,
+                )
+                original = await connection.fetchrow("SELECT * FROM import_configs")
+                snapshot = await connection.fetchrow("SELECT * FROM source_files")
+            finally:
+                await connection.close()
+
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+            connection = await connect(url)
+            try:
+                assert await connection.fetchrow("SELECT * FROM import_configs") == original
+                assert dict(await connection.fetchrow("SELECT * FROM source_files")) == {
+                    **dict(snapshot),
+                    "processing_result": None,
+                }
+                await connection.execute(
+                    "INSERT INTO import_configs (supplier_id, config_data) "
+                    'VALUES ($1, \'{"delimiter": "|"}\')',
+                    supplier_id,
+                )
+                versions = await connection.fetch("SELECT * FROM import_configs ORDER BY id")
+                assert len(versions) == 2
+                assert versions[0] == original
+            finally:
+                await connection.close()
+
+            result = alembic_command(url, "downgrade", "d38f04e271ab")
+            assert result.returncode != 0
+            assert "Cannot restore unique supplier configurations" in result.stderr
+            connection = await connect(url)
+            try:
+                assert (
+                    await connection.fetchval("SELECT version_num FROM alembic_version")
+                    == "f72a3c91d806"
+                )
+                assert (
+                    await connection.fetch("SELECT * FROM import_configs ORDER BY id") == versions
+                )
+                assert dict(await connection.fetchrow("SELECT * FROM source_files")) == {
+                    **dict(snapshot),
+                    "processing_result": None,
+                }
+                # Remove only this test's extra version before checking a safe downgrade.
+                await connection.execute("DELETE FROM import_configs WHERE id <> $1", original_id)
+            finally:
+                await connection.close()
+
+            assert_migration_ok(url, "downgrade", "d38f04e271ab")
+            connection = await connect(url)
+            try:
+                assert await connection.fetchrow("SELECT * FROM import_configs") == original
+                with pytest.raises(asyncpg.UniqueViolationError):
+                    await connection.execute(
+                        "INSERT INTO import_configs (supplier_id, config_data) VALUES ($1, '{}')",
+                        supplier_id,
+                    )
+                assert await connection.fetchrow("SELECT * FROM source_files") == snapshot
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+
+    asyncio.run(scenario())

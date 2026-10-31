@@ -5,7 +5,7 @@ import { describeError, uploadCsv, type SourceFile } from "@/lib/api";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
-export default function CsvUpload({ supplierId, configReady }: { supplierId: number; configReady: boolean }) {
+export default function CsvUpload({ supplierId, configReady, onUploaded }: { supplierId: number; configReady: boolean; onUploaded: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +34,7 @@ export default function CsvUpload({ supplierId, configReady }: { supplierId: num
     try {
       const result = await uploadCsv(supplierId, file);
       setUploaded(result);
+      onUploaded();
       setFile(null);
       if (input.current) input.current.value = "";
     } catch (cause) { setError(describeError(cause)); }
@@ -45,7 +46,7 @@ export default function CsvUpload({ supplierId, configReady }: { supplierId: num
     <p className="small-text">CSV до 20 МиБ с заголовками в первой строке. Файл сохранится у выбранного поставщика вместе с копией конфига.</p>
     {!configReady && <p className="notice" role="status">Сначала сохраните конфиг или выберите сохранённый вариант.</p>}
     {error && <p className="notice error" role="alert">{error}</p>}
-    {uploaded && <div className="notice success" role="status"><strong>Файл «{uploaded.filename}» загружен.</strong><div>ID: {uploaded.id}</div><div>Статус: загружен. Обработка ещё не запускалась.</div></div>}
+    {uploaded && <div className="notice success" role="status"><strong>Файл «{uploaded.filename}» загружен.</strong><div>ID: {uploaded.id}</div><div>Теперь нажмите «Обработать» в списке файлов ниже.</div></div>}
     <form className="form" onSubmit={submit} aria-busy={busy}>
       <label className="field">CSV-файл
         <input ref={input} type="file" name="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => choose(event.target.files?.[0] || null)} />

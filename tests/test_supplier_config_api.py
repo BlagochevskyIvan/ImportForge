@@ -13,7 +13,7 @@ CONFIG = {
 }
 
 
-def test_config_create_conflict_and_ownership(database_url, monkeypatch, signing_key):
+def test_config_create_versions_and_ownership(database_url, monkeypatch, signing_key):
     async def scenario():
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:
             client, ids, authorization = context
@@ -43,10 +43,12 @@ def test_config_create_conflict_and_ownership(database_url, monkeypatch, signing
             assert (await client.get(path, headers=owner)).json() == created.json()
 
             changed = {"config_data": {**CONFIG, "delimiter": "|"}}
-            conflict = await client.post(path, headers=owner, json=changed)
-            assert conflict.status_code == 409, conflict.text
+            version = await client.post(path, headers=owner, json=changed)
+            assert version.status_code == 201, version.text
+            assert version.json()["id"] != created.json()["id"]
+            assert version.json()["config_data"] == changed["config_data"]
             assert (await client.post(path, headers=other, json=changed)).status_code == 404
-            assert (await client.get(path, headers=owner)).json() == created.json()
+            assert (await client.get(path, headers=owner)).json() == version.json()
 
     asyncio.run(scenario())
 
@@ -67,12 +69,17 @@ def test_config_delete_persists_and_allows_recreation(database_url, monkeypatch,
             path = f"{supplier_path}/config"
             created = await client.post(path, headers=owner, json={"config_data": CONFIG})
             assert created.status_code == 201, created.text
+            updated = await client.put(
+                path, headers=owner, json={"config_data": {**CONFIG, "delimiter": "|"}}
+            )
+            assert updated.status_code == 200, updated.text
+            assert updated.json()["id"] != created.json()["id"]
 
             for headers, expected in [({}, 401), (other, 404)]:
                 response = await client.delete(path, headers=headers)
                 assert response.status_code == expected, response.text
             assert (await client.delete("/suppliers/-1/config", headers=owner)).status_code == 404
-            assert (await client.get(path, headers=owner)).json() == created.json()
+            assert (await client.get(path, headers=owner)).json() == updated.json()
 
             deleted = await client.delete(path, headers=owner)
             assert deleted.status_code == 200, deleted.text
@@ -90,7 +97,7 @@ def test_config_delete_persists_and_allows_recreation(database_url, monkeypatch,
     asyncio.run(scenario())
 
 
-def test_config_save_replace_and_ownership(database_url, monkeypatch, signing_key):
+def test_config_save_new_version_and_ownership(database_url, monkeypatch, signing_key):
     async def scenario():
         async with authenticated_client(database_url, monkeypatch, signing_key) as context:
             client, ids, authorization = context
@@ -122,7 +129,7 @@ def test_config_save_replace_and_ownership(database_url, monkeypatch, signing_ke
             changed = {**CONFIG, "encoding": "utf-8"}
             replaced = await client.put(path, headers=owner, json={"config_data": changed})
             assert replaced.status_code == 200
-            assert replaced.json()["id"] == saved.json()["id"]
+            assert replaced.json()["id"] != saved.json()["id"]
             assert (await client.get(path, headers=owner)).json()["config_data"] == changed
             for config in [
                 {**CONFIG, "column_mapping": {"a": "sku", "b": "sku", "c": "price"}},

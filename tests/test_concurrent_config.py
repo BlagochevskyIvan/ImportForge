@@ -15,7 +15,8 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("create_only", [False, True])
-def test_concurrent_writes_create_one_config(database_url, create_only):
+@pytest.mark.parametrize("same_settings", [False, True])
+def test_concurrent_writes_preserve_config_versions(database_url, create_only, same_settings):
     async def scenario():
         async with temporary_database(database_url) as url:
             migration = alembic_command(url, "upgrade", "head")
@@ -42,30 +43,32 @@ def test_concurrent_writes_create_one_config(database_url, create_only):
                 write_config = config_crud.create_config if create_only else config_crud.save_config
 
                 async def save(delimiter):
-                    try:
-                        async with sessions() as session, session.begin():
-                            config = await write_config(
-                                session,
-                                supplier_id,
-                                CsvConfig(
-                                    delimiter=delimiter,
-                                    column_mapping={"SKU": "sku", "Name": "name", "Price": "price"},
-                                ),
-                                user_id=user_id,
-                            )
-                            return config.id, delimiter
-                    except config_crud.ConfigAlreadyExistsError:
-                        return None
+                    async with sessions() as session, session.begin():
+                        config = await write_config(
+                            session,
+                            supplier_id,
+                            CsvConfig(
+                                delimiter=delimiter,
+                                column_mapping={"SKU": "sku", "Name": "name", "Price": "price"},
+                            ),
+                            user_id=user_id,
+                        )
+                        return config.id, delimiter
 
-                results = await asyncio.gather(save(","), save(";"), save("|"))
-                successful = [result for result in results if result is not None]
-                assert len(successful) == (1 if create_only else 3)
-                assert len({config_id for config_id, _ in successful}) == 1
+                delimiters = [","] * 3 if same_settings else [",", ";", "|"]
+                results = await asyncio.gather(*(save(delimiter) for delimiter in delimiters))
+                expected_count = 1 if same_settings and not create_only else 3
+                assert len({config_id for config_id, _ in results}) == expected_count
                 async with sessions() as session:
-                    assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 1
-                    if create_only:
-                        config = await config_crud.get_config(session, supplier_id, user_id=user_id)
-                        assert config.config_data["delimiter"] == successful[0][1]
+                    assert (
+                        await session.scalar(select(func.count()).select_from(ImportConfig))
+                        == expected_count
+                    )
+                    for config_id, delimiter in results:
+                        version = await session.get(ImportConfig, config_id)
+                        assert version.config_data["delimiter"] == delimiter
+                    config = await config_crud.get_config(session, supplier_id, user_id=user_id)
+                    assert config.id == max(config_id for config_id, _ in results)
             finally:
                 await engine.dispose()
 

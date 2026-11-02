@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${DB_USER:-user}
+      POSTGRES_PASSWORD: ${DB_PASS:-password}
+      POSTGRES_DB: ${DB_NAME:-db}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: . # образ из корня проекта
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-user}:${DB_PASS:-password}@postgres:5432/${DB_NAME:-db}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./certs:/app/certs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ./src/web
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  minio:
+    image: docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000" #s3 апи
+      - "9001:9001" #веб коесоль минио
+    volumes:
+      - minio_data:/data
+
+  postgres_test:
+    image: postgres:17
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_importforge
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_importforge"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+  
+  migrate:
+    build:
+      .
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-user}:${DB_PASS:-password}@postgres:5432/${DB_NAME:-db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m alembic upgrade head
+    
+
+
+volumes:
+  postgres_data:
+  minio_data:

@@ -54,9 +54,6 @@ class SourceFile(Base):
     )
     config_data: Mapped[dict | None] = mapped_column(JSONB)
 
-    # счётчики, ключи артефактов/описание ошибки
-    processing_result: Mapped[dict | None] = mapped_column(JSONB)
-
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         primary_key=True,
@@ -70,12 +67,59 @@ class SourceFile(Base):
         unique=True,
     )
 
-    status: Mapped[str] = mapped_column(
-        String(30),
-        default="uploaded",
-    )
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+class ImportRun(Base):
+    __tablename__ = "import_runs"
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+
+    source_file_id: Mapped[UUID] = mapped_column(
+        ForeignKey("source_files.id", ondelete="CASCADE"),
+        index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="pending",
+    )
+
+    сreated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    error_code: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    error_message: Mapped[str | None] = mapped_column(
+        String(1024),
+        nullable=True,
+    )
+
+    # счётчики, ключи артефактов/описание ошибки
+    processing_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

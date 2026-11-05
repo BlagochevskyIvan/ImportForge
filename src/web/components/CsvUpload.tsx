@@ -5,7 +5,7 @@ import { describeError, uploadCsv, type SourceFile } from "@/lib/api";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
-export default function CsvUpload({ supplierId, configReady, onUploaded }: { supplierId: number; configReady: boolean; onUploaded: () => void }) {
+export default function CsvUpload({ supplierId, onUploaded }: { supplierId: number; onUploaded: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +27,7 @@ export default function CsvUpload({ supplierId, configReady, onUploaded }: { sup
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || !file || !configReady) return;
+    if (busy || !file) return;
     setBusy(true);
     setError(null);
     setUploaded(null);
@@ -42,9 +42,8 @@ export default function CsvUpload({ supplierId, configReady, onUploaded }: { sup
   }
 
   return <section className="card" aria-labelledby="csv-title">
-    <p className="eyebrow">Шаг 2</p><h2 id="csv-title">Загрузка CSV</h2>
-    <p className="small-text">CSV до 20 МиБ с заголовками в первой строке. Файл сохранится у выбранного поставщика вместе с копией конфига.</p>
-    {!configReady && <p className="notice" role="status">Сначала сохраните конфиг или выберите сохранённый вариант.</p>}
+    <p className="eyebrow">Исходный файл</p><h2 id="csv-title">Загрузка CSV</h2>
+    <p className="small-text">CSV до 20 МиБ с заголовками в первой строке. Настройки обработки можно выбрать после загрузки.</p>
     {error && <p className="notice error" role="alert">{error}</p>}
     {uploaded && <div className="notice success" role="status"><strong>Файл «{uploaded.filename}» загружен.</strong><div>ID: {uploaded.id}</div><div>Теперь нажмите «Обработать» в списке файлов ниже.</div></div>}
     <form className="form" onSubmit={submit} aria-busy={busy}>
@@ -53,7 +52,7 @@ export default function CsvUpload({ supplierId, configReady, onUploaded }: { sup
       </label>
       {file && <p className="selected-file">{file.name} <span className="hint">({(file.size / 1024).toFixed(1)} КиБ)</span></p>}
       <div className="actions">
-        <button className="button" type="submit" disabled={busy || !file || !configReady}>{busy ? "Загружаем…" : "Загрузить CSV"}</button>
+        <button className="button" type="submit" disabled={busy || !file}>{busy ? "Загружаем…" : "Загрузить CSV"}</button>
         <button className="button secondary" type="button" disabled={busy || !file} onClick={() => { if (input.current) input.current.value = ""; choose(null); }}>Очистить</button>
       </div>
       {busy && <span className="hint" role="status">Отправляем файл. Дождитесь подтверждения сервера.</span>}

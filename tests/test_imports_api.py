@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.routers import files
 from src.db.models import ImportConfig, SourceFile
+from src.schemas.import_config import CsvConfig
 from tests.test_supplier_api import authenticated_client
 from tests.test_supplier_api import signing_key as signing_key
 from tests.test_supplier_config_api import CONFIG
@@ -85,11 +86,13 @@ def test_upload_binds_supplier_and_snapshots_config(
                 assert record.supplier_id == supplier_id
                 assert record.config_data == CONFIG
                 assert storage.files[record.object_key] == CSV
-            changed = {
-                "delimiter": "|",
-                "encoding": "utf-8",
-                "column_mapping": {"SKU": "sku", "Name": "name", "Price": "price"},
-            }
+            changed = CsvConfig.model_validate(
+                {
+                    "delimiter": "|",
+                    "encoding": "utf-8",
+                    "column_mapping": {"SKU": "sku", "Name": "name", "Price": "price"},
+                }
+            ).model_dump(mode="json")
             updated = await client.request(
                 save_method, path, headers=owner, json={"config_data": changed}
             )
@@ -108,19 +111,19 @@ def test_upload_binds_supplier_and_snapshots_config(
 
             assert (await client.delete(path, headers=owner)).json() is True
             assert (await client.get(path, headers=owner)).json() is None
-            assert (await upload()).status_code == 409
+            assert (await upload()).status_code == 201
             async with files.get_session() as session:
                 assert (await session.get(SourceFile, UUID(result["id"]))).config_data == CONFIG
                 assert (
                     await session.get(SourceFile, UUID(second.json()["id"]))
                 ).config_data == changed
                 assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 0
-            assert len(storage.files) == 2
+            assert len(storage.files) == 3
 
     asyncio.run(scenario())
 
 
-def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
+def test_upload_checks_auth_ownership_and_invalid_files(
     database_url, monkeypatch, signing_key
 ):
     async def scenario():
@@ -146,7 +149,8 @@ def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
             assert (await upload(authorization(ids["inactive"]))).status_code == 401
             assert (await upload(authorization(ids["other"]))).status_code == 404
             assert (await upload(owner, supplier=987654321)).status_code == 404
-            assert (await upload(owner)).status_code == 409
+            assert (await upload(owner)).status_code == 201
+            storage.files.clear()
             await client.put(
                 f"/suppliers/{supplier_id}/config", headers=owner, json={"config_data": CONFIG}
             )
@@ -157,7 +161,7 @@ def test_upload_rejects_auth_ownership_missing_config_and_invalid_files(
             assert (await upload(owner)).status_code == 413
             assert storage.files == {}
             async with files.get_session() as session:
-                assert await session.scalar(select(func.count()).select_from(SourceFile)) == 0
+                assert await session.scalar(select(func.count()).select_from(SourceFile)) == 1
 
     asyncio.run(scenario())
 

@@ -15,12 +15,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.background import BackgroundTask
 
 from src.api.dependencies import get_current_user
-from src.db import config_crud, file_crud, supplier_crud
+from src.db import config_crud, file_crud, run_crud, supplier_crud
 from src.db.database import get_session
 from src.db.models import SourceFile
-from src.schemas.imports import SourceFileRead
+from src.schemas.imports import ImportRunCreate, ImportRunRead, SourceFileRead
 from src.schemas.users import UserRead
 from src.services.import_processor import (
+    ConfigurationNotFoundError,
+    ImportConfigurationError,
     ProcessingInProgressError,
     SourceFileNotFoundError,
     process_import,
@@ -77,22 +79,19 @@ async def upload_csv(
                 if supplier is None:
                     raise HTTPException(404, "Supplier not found")
                 config = await config_crud.get_config(session, supplier_id, user_id=current_user.id)
-                if config is None:
-                    raise HTTPException(409, "Save supplier configuration before uploading")
                 storage = get_storage()
                 await run_in_threadpool(storage.upload, file.file, key)
                 uploaded = True
                 record = SourceFile(
                     id=file_id,
                     supplier_id=supplier_id,
-                    config_data=deepcopy(config.config_data),
+                    config_data=deepcopy(config.config_data) if config is not None else None,
                     filename=file.filename,
                     object_key=key,
-                    status="uploaded",
                 )
                 session.add(record)
                 await session.flush()
-                result = SourceFileRead.model_validate(record)
+                result = SourceFileRead.from_file(record)
         except (ClientError, BotoCoreError, S3UploadFailedError) as exc:
             logger.exception("S3 upload failed")
             raise HTTPException(502, "File storage unavailable") from exc
@@ -123,7 +122,10 @@ async def get_supplier_files(
         records = await file_crud.list_files(
             session, supplier_id, user_id=current_user.id, offset=offset, limit=limit
         )
-        return [SourceFileRead.model_validate(record) for record in records]
+        latest = await run_crud.latest_runs(
+            session, [record.id for record in records], user_id=current_user.id
+        )
+        return [SourceFileRead.from_file(record, latest.get(record.id)) for record in records]
 
 
 @router.get("/{file_id}", response_model=SourceFileRead)
@@ -135,22 +137,37 @@ async def get_csv_info(
         source_file = await file_crud.get_file_by_id(session, file_id, user_id=current_user.id)
         if source_file is None:
             raise HTTPException(404, "File not found")
-        return SourceFileRead.model_validate(source_file)
+        latest = await run_crud.latest_runs(session, [file_id], user_id=current_user.id)
+        return SourceFileRead.from_file(source_file, latest.get(file_id))
 
 
 @router.post("/{file_id}/process", response_model=SourceFileRead)
 async def process_csv_file(
     file_id: UUID,
     current_user: Annotated[UserRead, Depends(get_current_user)],
+    data: ImportRunCreate | None = None,
 ):
+    return await _process_file(file_id, current_user, data, new_run=False)
+
+
+async def _process_file(file_id, current_user, data, *, new_run):
     async with get_session() as session:
         source_file = await file_crud.get_file_by_id(session, file_id, user_id=current_user.id)
         if source_file is None:
             raise HTTPException(404, "File not found")
     try:
         return await process_import(
-            file_id, user_id=current_user.id, storage=get_storage(), session_factory=get_session
+            file_id,
+            user_id=current_user.id,
+            storage=get_storage(),
+            session_factory=get_session,
+            config_id=data.config_id if data is not None else None,
+            new_run=new_run,
         )
+    except ConfigurationNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ImportConfigurationError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except SourceFileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ProcessingInProgressError as exc:
@@ -160,11 +177,53 @@ async def process_csv_file(
         raise HTTPException(500, "Failed to save processing state") from exc
 
 
+@router.post("/{file_id}/runs", response_model=ImportRunRead, status_code=201)
+async def create_csv_run(
+    file_id: UUID,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    data: ImportRunCreate | None = None,
+):
+    result = await _process_file(file_id, current_user, data, new_run=True)
+    return result.latest_run
+
+
+@router.get("/{file_id}/runs", response_model=list[ImportRunRead])
+async def list_csv_runs(
+    file_id: UUID,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+):
+    async with get_session() as session:
+        if await file_crud.get_file_by_id(session, file_id, user_id=current_user.id) is None:
+            raise HTTPException(404, "File not found")
+        return [
+            ImportRunRead.model_validate(run)
+            for run in await run_crud.list_runs(
+                session, file_id, user_id=current_user.id, offset=offset, limit=limit
+            )
+        ]
+
+
+@router.get("/{file_id}/runs/{run_id}", response_model=ImportRunRead)
+async def get_csv_run(
+    file_id: UUID,
+    run_id: UUID,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+):
+    async with get_session() as session:
+        run = await run_crud.get_run(session, run_id, file_id=file_id, user_id=current_user.id)
+        if run is None:
+            raise HTTPException(404, "Import run not found")
+        return ImportRunRead.model_validate(run)
+
+
 @router.get("/{file_id}/download")
 async def download_csv(
     file_id: UUID,
     current_user: Annotated[UserRead, Depends(get_current_user)],
     kind: Literal["source", "result", "errors"] = "source",
+    run_id: UUID | None = None,
 ):
     async with get_session() as session:
         source_file = await file_crud.get_file_by_id(session, file_id, user_id=current_user.id)
@@ -173,10 +232,22 @@ async def download_csv(
         key = source_file.object_key
         filename = source_file.filename
         if kind != "source":
-            if source_file.status != "completed" or not source_file.processing_result:
+            if run_id is not None:
+                run = await run_crud.get_run(
+                    session, run_id, file_id=file_id, user_id=current_user.id
+                )
+                if run is None:
+                    raise HTTPException(404, "Import run not found")
+            else:
+                run = (await run_crud.latest_runs(session, [file_id], user_id=current_user.id)).get(
+                    file_id
+                )
+            if run is None or run.status != "completed" or not run.processing_result:
                 raise HTTPException(409, "Processing result is not ready")
-            key = source_file.processing_result[f"{kind}_key"]
-            filename = f"{file_id}-{kind}.csv"
+            key = run.processing_result.get(f"{kind}_key")
+            if not key:
+                raise HTTPException(409, "Processing result is not ready")
+            filename = f"{file_id}-{run.id}-{kind}.csv"
     storage = get_storage()
     buffer = TemporaryFile(mode="w+b")
     try:

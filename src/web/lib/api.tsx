@@ -12,19 +12,41 @@ export interface Credentials { email: string; password: string }
 export interface Registration extends Credentials { username: string }
 export interface SupplierInput { name: string; contact_email: string }
 export interface Supplier extends SupplierInput { id: number; user_id: number; is_active: boolean }
+export interface CsvColumn {
+  source: string;
+  target: string;
+  type: "text" | "integer" | "decimal";
+  required: boolean;
+  trim: boolean;
+  min_value: string | null;
+  max_value: string | null;
+}
 export interface CsvConfig {
+  schema_version: 2;
   delimiter: string;
   encoding: "utf-8" | "utf-8-sig" | "cp1251";
-  column_mapping: Record<string, "sku" | "name" | "price">;
+  columns: CsvColumn[];
 }
-export interface ImportConfig { id: number; supplier_id: number; config_data: CsvConfig }
+export interface ImportConfig { id: number; supplier_id: number; name: string; config_data: CsvConfig }
 export interface ProcessingResult { total_rows: number; successful_rows: number; failed_rows: number; error: string | null }
+export interface ImportRun {
+  id: string;
+  source_file_id: string;
+  config_id: number | null;
+  config_name: string;
+  status: "queued" | "processing" | "retry_wait" | "completed" | "failed";
+  created_at: string;
+  attempt_count: number;
+  error_message: string | null;
+  processing_result: ProcessingResult | null;
+}
 export interface SourceFile {
   id: string;
   supplier_id: number;
   filename: string;
-  status: "uploaded" | "processing" | "completed" | "failed";
+  status: "uploaded" | ImportRun["status"];
   processing_result: ProcessingResult | null;
+  latest_run: ImportRun | null;
 }
 interface TokenResponse { access_token: string; token_type: "bearer" }
 
@@ -52,6 +74,10 @@ const messages: Record<string, string> = {
   "File storage is not configured": "Хранилище файлов ещё не настроено на сервере.",
   "Failed to save file metadata": "Не удалось сохранить сведения о файле. Повторите загрузку.",
   "File not found": "Файл не найден или недоступен.",
+  "Configuration not found": "Выбранная конфигурация недоступна для этого поставщика.",
+  "Choose a configuration before processing": "Выберите сохранённую конфигурацию для запуска.",
+  "The saved configuration is invalid": "Сохранённая конфигурация содержит ошибки.",
+  "Import run not found": "Запуск не найден или недоступен.",
   "File processing is already in progress": "Этот файл уже обрабатывается. Обновите список чуть позже.",
   "Processing result is not ready": "Результат ещё не готов. Сначала обработайте файл.",
   "Failed to save processing state": "Не удалось сохранить результат обработки. Обновите список файлов.",
@@ -219,9 +245,17 @@ export function getSupplierConfig(id: number) {
   return authenticatedRequest<ImportConfig | null>(`/suppliers/${id}/config`);
 }
 
-export function saveSupplierConfig(id: number, config: CsvConfig) {
+export function listSupplierConfigs(id: number) {
+  return authenticatedRequest<ImportConfig[]>(`/suppliers/${id}/configs`);
+}
+
+export function listRuns(fileId: string) {
+  return authenticatedRequest<ImportRun[]>(`/imports/${fileId}/runs`);
+}
+
+export function saveSupplierConfig(id: number, config: CsvConfig, name: string) {
   return authenticatedRequest<ImportConfig>(`/suppliers/${id}/config`, {
-    method: "PUT", body: JSON.stringify({ config_data: config }),
+    method: "PUT", body: JSON.stringify({ name, config_data: config }),
   });
 }
 
@@ -236,14 +270,14 @@ export function listFiles(supplierId: number, offset = 0, limit = 20) {
   return authenticatedRequest<SourceFile[]>(`/imports?supplier_id=${supplierId}&offset=${offset}&limit=${limit}`);
 }
 
-export function processFile(fileId: string) {
+export function processFile(fileId: string, configId: number | null) {
   return authenticatedRequest<SourceFile>(`/imports/${fileId}/process`, {
-    method: "POST", signal: AbortSignal.timeout(120000),
+    method: "POST", body: JSON.stringify({ config_id: configId }), signal: AbortSignal.timeout(120000),
   });
 }
 
-export async function downloadCsv(file: SourceFile, kind: "source" | "result" | "errors") {
-  const blob = await authenticatedRequest<Blob>(`/imports/${file.id}/download?kind=${kind}`, {
+export async function downloadCsv(file: SourceFile, kind: "source" | "result" | "errors", runId?: string) {
+  const blob = await authenticatedRequest<Blob>(`/imports/${file.id}/download?kind=${kind}${runId ? `&run_id=${encodeURIComponent(runId)}` : ""}`, {
     signal: AbortSignal.timeout(120000),
   }, "blob");
   const url = URL.createObjectURL(blob);

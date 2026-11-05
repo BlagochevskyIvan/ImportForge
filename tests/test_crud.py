@@ -163,7 +163,7 @@ def test_config_versions_and_owner_checks(database_url):
                 assert await session.scalar(select(func.count()).select_from(ImportConfig)) == 2
                 assert (
                     await session.get(ImportConfig, config_id)
-                ).config_data == config_data().model_dump()
+                ).config_data == config_data().model_dump(mode="json")
                 config = await config_crud.get_config(session, supplier_id, user_id=owner_id)
                 assert config.id == second.id
                 assert config.config_data["delimiter"] == ";"

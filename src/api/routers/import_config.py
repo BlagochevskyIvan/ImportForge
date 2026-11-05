@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies import get_current_user
 from src.db import config_crud, supplier_crud
@@ -9,6 +9,27 @@ from src.schemas.import_config import ImportConfigCreate, ImportConfigRead, Impo
 from src.schemas.users import UserRead
 
 router = APIRouter()
+
+
+@router.get("/{supplier_id}/configs", response_model=list[ImportConfigRead])
+async def list_supplier_configs(
+    supplier_id: int,
+    current_user: Annotated[UserRead, Depends(get_current_user)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+):
+    async with get_session() as session:
+        if (
+            await supplier_crud.get_supplier_by_id(session, supplier_id, user_id=current_user.id)
+            is None
+        ):
+            raise HTTPException(404, "Supplier not found")
+        return [
+            ImportConfigRead.model_validate(item)
+            for item in await config_crud.list_configs(
+                session, supplier_id, user_id=current_user.id, offset=offset, limit=limit
+            )
+        ]
 
 
 # None -> configure for the first time
@@ -35,7 +56,7 @@ async def save_supplier_config(
 ):
     async with get_session() as session, session.begin():
         config = await config_crud.save_config(
-            session, supplier_id, data.config_data, user_id=current_user.id
+            session, supplier_id, data.config_data, user_id=current_user.id, name=data.name
         )
         if config is None:
             raise HTTPException(404, "Supplier not found")
@@ -51,7 +72,7 @@ async def create_supplier_config(
 ):
     async with get_session() as session, session.begin():
         config = await config_crud.create_config(
-            session, supplier_id, data.config_data, user_id=current_user.id
+            session, supplier_id, data.config_data, user_id=current_user.id, name=data.name
         )
         if config is None:
             raise HTTPException(404, "Supplier not found")

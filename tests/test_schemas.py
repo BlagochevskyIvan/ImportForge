@@ -76,14 +76,12 @@ def test_invalid_csv_delimiter(delimiter):
 @pytest.mark.parametrize(
     "mapping",
     [
-        {"A": "sku"},
         {"A": "sku", "B": "sku", "C": "price"},
-        {"A": "sku", "B": "name", "C": "unknown"},
         {" ": "sku", "B": "name", "C": "price"},
         {"A": "sku", " A ": "name", "C": "price"},
     ],
 )
-def test_mapping_requires_each_known_target_once(mapping):
+def test_mapping_rejects_duplicate_or_invalid_names(mapping):
     with pytest.raises(ValidationError):
         CsvConfig(column_mapping=mapping)
 
@@ -91,4 +89,27 @@ def test_mapping_requires_each_known_target_once(mapping):
 def test_config_is_structured_json():
     config = CsvConfig(delimiter=";", column_mapping=MAPPING)
     response = ImportConfigRead(id=1, supplier_id=2, config_data=config)
-    assert response.model_dump()["config_data"]["column_mapping"]["Цена"] == "price"
+    assert response.model_dump()["config_data"]["columns"][2]["target"] == "price"
+
+
+@pytest.mark.parametrize("mapping", [{"A": "custom"}, {"A": "x", "B": "y", "C": "z", "D": "w"}])
+def test_legacy_mapping_accepts_arbitrary_targets(mapping):
+    config = CsvConfig(column_mapping=mapping)
+    assert [column.target for column in config.columns] == list(mapping.values())
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        [],
+        [{"source": "A", "target": "x"}, {"source": "B", "target": " x "}],
+        [{"source": "A", "target": "x", "type": "float"}],
+        [{"source": "A", "target": "x", "min_value": 0}],
+        [{"source": "A", "target": "x", "type": "decimal", "min_value": 2, "max_value": 1}],
+        [{"source": "A", "target": "x", "type": "decimal", "min_value": "NaN"}],
+        [{"source": "A", "target": "x\x00"}],
+    ],
+)
+def test_flexible_config_rejects_ambiguous_names_and_invalid_rules(columns):
+    with pytest.raises(ValidationError):
+        CsvConfig(columns=columns)

@@ -6,10 +6,11 @@ from uuid import uuid4
 
 import pytest
 from botocore.exceptions import EndpointConnectionError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.api.routers import files, suppliers
-from src.db.models import SourceFile, Supplier, User
+from src.db.models import ImportRun, SourceFile, Supplier, User
 from src.services.import_processor import ProcessingInProgressError, process_import
 from tests.conftest import alembic_command, temporary_database
 from tests.test_imports_api import CSV, FileStorage, create_supplier
@@ -219,7 +220,11 @@ def test_parallel_requests_process_the_file_once(database_url):
                 try:
                     assert await asyncio.to_thread(started.wait, 5)
                     async with sessions() as session:
-                        assert (await session.get(SourceFile, file_id)).status == "processing"
+                        assert (
+                            await session.scalar(
+                                select(ImportRun).where(ImportRun.source_file_id == file_id)
+                            )
+                        ).status == "processing"
                     with pytest.raises(ProcessingInProgressError):
                         await process_import(
                             file_id, user_id=user_id, storage=storage, session_factory=sessions

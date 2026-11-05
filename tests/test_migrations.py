@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import asyncpg
 import pytest
@@ -33,6 +34,7 @@ def test_clean_install_schema_check_and_empty_roundtrip(database_url):
                     "suppliers",
                     "import_configs",
                     "source_files",
+                    "import_runs",
                     "alembic_version",
                 }
             finally:
@@ -40,6 +42,97 @@ def test_clean_install_schema_check_and_empty_roundtrip(database_url):
             assert_migration_ok(url, "downgrade", "base")
             assert_migration_ok(url, "upgrade", "head")
             assert_migration_ok(url, "check")
+
+    asyncio.run(scenario())
+
+
+def test_import_run_migration_preserves_legacy_results_and_blocks_history_loss(database_url):
+    async def scenario():
+        async with temporary_database(database_url) as url:
+            assert_migration_ok(url, "upgrade", "4a3c0f95eccb")
+            connection = await connect(url)
+            config = {"delimiter": ";", "column_mapping": {"A": "sku", "B": "name", "C": "price"}}
+            metadata = {
+                "total_rows": 2,
+                "successful_rows": 1,
+                "failed_rows": 1,
+                "result_key": "keep/result.csv",
+                "errors_key": "keep/errors.csv",
+            }
+            try:
+                await connection.execute(
+                    "INSERT INTO source_files (id, filename, object_key, status, config_data, processing_result) "
+                    "VALUES ('11111111-1111-1111-1111-111111111111', 'old.csv', 'raw/old.csv', 'completed', $1::jsonb, $2::jsonb)",
+                    json.dumps(config),
+                    json.dumps(metadata),
+                )
+                await connection.execute(
+                    "INSERT INTO source_files (id, filename, object_key, status, processing_result) "
+                    "VALUES ('22222222-2222-2222-2222-222222222222', 'bad.csv', 'raw/bad.csv', 'failed', '{\"error\": \"old failure\"}')"
+                )
+            finally:
+                await connection.close()
+            assert_migration_ok(url, "upgrade", "head")
+            assert_migration_ok(url, "check")
+            connection = await connect(url)
+            try:
+                runs = await connection.fetch("SELECT * FROM import_runs ORDER BY source_file_id")
+                assert len(runs) == 2
+                assert runs[0]["status"] == "completed"
+                assert json.loads(runs[0]["config_data"]) == config
+                assert json.loads(runs[0]["processing_result"]) == metadata
+                assert runs[0]["started_at"] is None and runs[0]["finished_at"] is None
+                assert runs[0]["attempt_count"] == 0
+                assert runs[1]["status"] == "failed"
+                assert runs[1]["error_message"] == "old failure"
+                assert json.loads(runs[1]["config_data"]) == {}
+            finally:
+                await connection.close()
+            result = alembic_command(url, "downgrade", "4a3c0f95eccb")
+            assert result.returncode != 0
+            assert "Cannot drop import run history" in result.stderr
+            connection = await connect(url)
+            try:
+                assert (
+                    await connection.fetch("SELECT * FROM import_runs ORDER BY source_file_id")
+                    == runs
+                )
+                assert await connection.fetchval("SELECT count(*) FROM source_files") == 2
+            finally:
+                await connection.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", ["processing", "unknown"])
+def test_import_run_migration_requires_resolving_legacy_active_states(database_url, status):
+    async def scenario():
+        async with temporary_database(database_url) as url:
+            assert_migration_ok(url, "upgrade", "4a3c0f95eccb")
+            connection = await connect(url)
+            try:
+                await connection.execute(
+                    "INSERT INTO source_files (id, filename, object_key, status) "
+                    "VALUES ('11111111-1111-1111-1111-111111111111', 'keep.csv', 'raw/keep.csv', $1)",
+                    status,
+                )
+            finally:
+                await connection.close()
+            result = alembic_command(url, "upgrade", "head")
+            assert result.returncode != 0
+            assert "Resolve legacy processing/unknown file states" in result.stderr
+            connection = await connect(url)
+            try:
+                assert (
+                    await connection.fetchval("SELECT version_num FROM alembic_version")
+                    == "4a3c0f95eccb"
+                )
+                assert await connection.fetchval("SELECT status FROM source_files") == status
+                assert not await connection.fetchval(
+                    "SELECT EXISTS (SELECT FROM pg_tables WHERE tablename = 'import_runs')"
+                )
+            finally:
+                await connection.close()
 
     asyncio.run(scenario())
 
@@ -201,10 +294,12 @@ def test_config_version_migration_preserves_data_and_blocks_lossy_downgrade(data
             assert_migration_ok(url, "check")
             connection = await connect(url)
             try:
-                assert await connection.fetchrow("SELECT * FROM import_configs") == original
+                assert dict(await connection.fetchrow("SELECT * FROM import_configs")) == {
+                    **dict(original),
+                    "name": "Основная",
+                }
                 assert dict(await connection.fetchrow("SELECT * FROM source_files")) == {
-                    **dict(snapshot),
-                    "processing_result": None,
+                    **{key: value for key, value in dict(snapshot).items() if key != "status"},
                 }
                 await connection.execute(
                     "INSERT INTO import_configs (supplier_id, config_data) "
@@ -213,7 +308,7 @@ def test_config_version_migration_preserves_data_and_blocks_lossy_downgrade(data
                 )
                 versions = await connection.fetch("SELECT * FROM import_configs ORDER BY id")
                 assert len(versions) == 2
-                assert versions[0] == original
+                assert dict(versions[0]) == {**dict(original), "name": "Основная"}
             finally:
                 await connection.close()
 
@@ -224,14 +319,13 @@ def test_config_version_migration_preserves_data_and_blocks_lossy_downgrade(data
             try:
                 assert (
                     await connection.fetchval("SELECT version_num FROM alembic_version")
-                    == "f72a3c91d806"
+                    == "a12d8e4c9b70"
                 )
                 assert (
                     await connection.fetch("SELECT * FROM import_configs ORDER BY id") == versions
                 )
                 assert dict(await connection.fetchrow("SELECT * FROM source_files")) == {
-                    **dict(snapshot),
-                    "processing_result": None,
+                    **{key: value for key, value in dict(snapshot).items() if key != "status"},
                 }
                 # Remove only this test's extra version before checking a safe downgrade.
                 await connection.execute("DELETE FROM import_configs WHERE id <> $1", original_id)
@@ -247,7 +341,9 @@ def test_config_version_migration_preserves_data_and_blocks_lossy_downgrade(data
                         "INSERT INTO import_configs (supplier_id, config_data) VALUES ($1, '{}')",
                         supplier_id,
                     )
-                assert await connection.fetchrow("SELECT * FROM source_files") == snapshot
+                assert dict(await connection.fetchrow("SELECT * FROM source_files")) == dict(
+                    snapshot
+                )
             finally:
                 await connection.close()
             assert_migration_ok(url, "upgrade", "head")

@@ -1,180 +1,141 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
-import { describeError, saveSupplierConfig, type CsvConfig, type ImportConfig } from "@/lib/api";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { describeError, listSupplierConfigs, saveSupplierConfig, type CsvColumn, type CsvConfig, type ImportConfig } from "@/lib/api";
 
-const defaultConfig: CsvConfig = {
-  delimiter: ",", encoding: "utf-8", column_mapping: { sku: "sku", name: "name", price: "price" },
-};
-const targets = ["sku", "name", "price"] as const;
-const targetLabels = { sku: "Артикул (sku)", name: "Название (name)", price: "Цена (price)" };
-
-function sourceFor(config: CsvConfig, target: typeof targets[number]) {
-  return Object.entries(config.column_mapping).find(([, value]) => value === target)?.[0] || "";
-}
-
-function readConfig(value: unknown): CsvConfig {
-  if (value && typeof value === "object" && "config_data" in value) value = value.config_data;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Ожидается JSON-объект конфига.");
-  const data = value as Record<string, unknown>;
-  if (Object.keys(data).some((key) => !["delimiter", "encoding", "column_mapping"].includes(key))) {
-    throw new Error("Допустимы только delimiter, encoding и column_mapping.");
-  }
-  const delimiter = data.delimiter === undefined ? "," : data.delimiter;
-  const encoding = data.encoding === undefined ? "utf-8" : data.encoding;
-  if (typeof delimiter !== "string" || Array.from(delimiter).length !== 1 || /[\n\r\0"]/.test(delimiter)) {
-    throw new Error("Разделитель должен быть одним символом, кроме переноса строки, NUL и кавычки.");
-  }
-  if (encoding !== "utf-8" && encoding !== "utf-8-sig" && encoding !== "cp1251") {
-    throw new Error("Выберите кодировку UTF-8, UTF-8 с BOM или Windows-1251.");
-  }
-  if (!data.column_mapping || typeof data.column_mapping !== "object" || Array.isArray(data.column_mapping)) {
-    throw new Error("Укажите соответствие колонок в column_mapping.");
-  }
-  const entries = Object.entries(data.column_mapping);
-  if (entries.length !== 3 || targets.some((target) => entries.filter(([, value]) => value === target).length !== 1)) {
-    throw new Error("Сопоставьте ровно три колонки: sku, name и price, каждую один раз.");
-  }
-  const names = entries.map(([name]) => name.trim());
-  if (names.some((name) => !name || Array.from(name).length > 200) || new Set(names).size !== 3) {
-    throw new Error("Названия трёх исходных колонок должны различаться и содержать от 1 до 200 символов.");
-  }
-  return {
-    delimiter, encoding,
-    column_mapping: Object.fromEntries(entries.map(([name, target]) => [name.trim(), target])) as CsvConfig["column_mapping"],
-  };
-}
+const blankColumn = (): CsvColumn => ({ source: "", target: "", type: "text", required: false, trim: true, min_value: null, max_value: null });
+const defaultConfig: CsvConfig = { schema_version: 2, delimiter: ",", encoding: "utf-8", columns: [blankColumn()] };
 
 export default function SupplierConfigForm({ supplierId, initialConfig, onReadyChange }: {
   supplierId: number;
   initialConfig: ImportConfig | null;
-  onReadyChange: (ready: boolean) => void;
+  onReadyChange: (config: ImportConfig | null) => void;
 }) {
   const [saved, setSaved] = useState(initialConfig);
-  const [selection, setSelection] = useState(initialConfig ? "saved" : "comma");
+  const [versions, setVersions] = useState<ImportConfig[]>(initialConfig ? [initialConfig] : []);
   const [config, setConfig] = useState(initialConfig?.config_data || defaultConfig);
-  const [sources, setSources] = useState(() => targets.map((target) => sourceFor(config, target)));
+  const [name, setName] = useState(initialConfig?.name || "Основная");
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(!initialConfig);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  function apply(next: CsvConfig, option: string, ready = false) {
-    setConfig(next);
-    setSources(targets.map((target) => sourceFor(next, target)));
-    setSelection(option);
-    setDirty(!ready);
-    setError(null);
-    setSuccess(null);
-    onReadyChange(ready);
+  useEffect(() => {
+    let active = true;
+    listSupplierConfigs(supplierId).then((items) => { if (active) setVersions(items); })
+      .catch((cause) => { if (active) setError(describeError(cause)); });
+    return () => { active = false; };
+  }, [supplierId]);
+
+  function apply(item: ImportConfig) {
+    setSaved(item); setConfig(item.config_data); setName(item.name);
+    setDirty(false); setError(null); setSuccess(null); onReadyChange(item);
   }
 
   function edited() {
-    setSelection("custom");
-    setDirty(true);
-    setError(null);
-    setSuccess(null);
-    onReadyChange(false);
+    setDirty(true); setError(null); setSuccess(null); onReadyChange(null);
+  }
+
+  function updateColumn(index: number, changes: Partial<CsvColumn>) {
+    setConfig({ ...config, columns: config.columns.map((column, i) => i === index ? { ...column, ...changes } : column) });
+    edited();
   }
 
   async function loadJson(file: File) {
-    setError(null);
-    setSuccess(null);
-    setBusy(true);
+    setBusy(true); setError(null);
     try {
       if (file.size > 64 * 1024) throw new Error("JSON-конфиг должен быть не больше 64 КиБ.");
       const parsed = JSON.parse((await file.text()).replace(/^\uFEFF/, ""));
-      apply(readConfig(parsed), "custom");
-      setSuccess(`Конфиг из «${file.name}» выбран. Сохраните его для загрузки CSV.`);
-    } catch (cause) {
-      setError(cause instanceof SyntaxError ? "Не удалось прочитать JSON. Проверьте формат файла." : describeError(cause));
-    } finally {
-      if (fileInput.current) fileInput.current.value = "";
-      setBusy(false);
-    }
+      const value = parsed.config_data ?? parsed;
+      if (!Array.isArray(value.columns) || !value.columns.length || value.columns.length > 200 ||
+          value.columns.some((column: unknown) => !column || typeof column !== "object" ||
+            !("source" in column) || !("target" in column) || typeof column.source !== "string" || typeof column.target !== "string")) {
+        throw new Error("Ожидается конфиг со списком columns от 1 до 200 колонок.");
+      }
+      setConfig({ ...defaultConfig, ...value, columns: value.columns.map((column: Partial<CsvColumn>) => ({ ...blankColumn(), ...column })) });
+      if (typeof parsed.name === "string") setName(parsed.name);
+      edited(); setSuccess("JSON загружен. Сохраните конфигурацию для запуска.");
+    } catch (cause) { setError(cause instanceof SyntaxError ? "Не удалось прочитать JSON." : describeError(cause)); }
+    finally { setBusy(false); if (fileInput.current) fileInput.current.value = ""; }
   }
 
   function downloadSaved() {
     if (!saved) return;
-    const blob = new Blob([JSON.stringify({ config_data: saved.config_data }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `supplier-${supplierId}-config.json`;
-    link.click();
-    // Let the browser start the download before releasing the object URL.
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ name: saved.name, config_data: saved.config_data }, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = `supplier-${supplierId}-config-${saved.id}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy) return;
-    setError(null);
-    setSuccess(null);
-    setBusy(true);
+    event.preventDefault(); if (busy) return;
+    setBusy(true); setError(null); setSuccess(null);
     try {
-      if (new Set(sources.map((name) => name.trim())).size !== 3) {
-        throw new Error("Для артикула, названия и цены укажите три разные колонки CSV.");
-      }
-      const next = readConfig({ ...config, column_mapping: Object.fromEntries(sources.map((name, index) => [name, targets[index]])) });
-      const result = await saveSupplierConfig(supplierId, next);
-      setSaved(result);
-      apply(result.config_data, "saved", true);
-      setSuccess("Конфиг сохранён. Теперь можно загрузить CSV.");
+      const result = await saveSupplierConfig(supplierId, config, name);
+      apply(result);
+      setVersions((items) => [result, ...items.filter((item) => item.id !== result.id)]);
+      setSuccess("Конфигурация сохранена и выбрана для запуска. Предыдущие версии доступны в списке.");
     } catch (cause) { setError(describeError(cause)); }
     finally { setBusy(false); }
   }
 
   return <section className="card" aria-labelledby="config-title">
-    <p className="eyebrow">Шаг 1</p><h2 id="config-title">Конфиг CSV</h2>
-    <p className="small-text">Выберите сохранённый конфиг, шаблон или JSON-файл. У поставщика один текущий конфиг.</p>
-    <p className="hint" role="status">{dirty
-      ? "Настройки не сохранены. Сохраните их перед загрузкой CSV."
-      : "Используется сохранённый конфиг поставщика."}</p>
+    <p className="eyebrow">Настройки обработки</p><h2 id="config-title">Конфигурации CSV</h2>
+    <p className="small-text">Выберите сохранённую версию или задайте свои колонки и правила. Порядок колонок ниже определяет порядок в результате.</p>
+    <p className="hint" role="status">{dirty ? "Есть несохранённые настройки. Сохраните их перед запуском." : `Для запуска выбрана конфигурация «${saved?.name}», версия #${saved?.id}.`}</p>
     {error && <p className="notice error" role="alert">{error}</p>}
     {success && <p className="notice success" role="status">{success}</p>}
-    <form onSubmit={save} aria-busy={busy}>
-      <fieldset className="form" disabled={busy}>
-        <legend className="sr-only">Настройки конфига CSV</legend>
-        <label className="field">Выбор конфига
-          <select value={selection} onChange={(event) => {
-            const option = event.target.value;
-            if (option === "saved" && saved) apply(saved.config_data, option, true);
-            else apply({ ...defaultConfig, delimiter: option === "semicolon" ? ";" : option === "tab" ? "\t" : "," }, option);
-          }}>
-            {saved && <option value="saved">Сохранённый конфиг поставщика</option>}
-            <option value="comma">CSV: запятая, UTF-8</option>
-            <option value="semicolon">CSV: точка с запятой, UTF-8</option>
-            <option value="tab">CSV: табуляция, UTF-8</option>
-            {selection === "custom" && <option value="custom">Свои настройки / JSON-файл</option>}
-          </select>
-        </label>
+    <form onSubmit={save} aria-busy={busy}><fieldset className="form" disabled={busy}>
+      <legend className="sr-only">Конфигурация CSV</legend>
+      <label className="field">Сохранённая версия
+        <select value={dirty ? "custom" : String(saved?.id ?? "custom")} onChange={(event) => {
+          const item = versions.find((version) => String(version.id) === event.target.value);
+          if (item) apply(item);
+          else { setConfig({ ...defaultConfig, columns: [blankColumn()] }); setName("Новая конфигурация"); edited(); }
+        }}>
+          <option value="custom">Новая / изменённая конфигурация</option>
+          {versions.map((item) => <option key={item.id} value={item.id}>{item.name} · #{item.id}</option>)}
+        </select>
+      </label>
+      <label className="field">Название конфигурации<input required maxLength={200} value={name} onChange={(event) => { setName(event.target.value); edited(); }} /></label>
+      <div className="actions">
+        <input ref={fileInput} className="sr-only" type="file" accept=".json,application/json" aria-label="JSON-конфиг" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadJson(file); }} />
+        <button className="button secondary small" type="button" onClick={() => fileInput.current?.click()}>Загрузить JSON</button>
+        {saved && <button className="button secondary small" type="button" onClick={downloadSaved}>Скачать сохранённый JSON</button>}
+        {saved && dirty && <button className="button secondary small" type="button" onClick={() => apply(saved)}>Отменить изменения</button>}
+      </div>
+      <div className="config-options">
+        <label className="field">Разделитель<select value={config.delimiter} onChange={(event) => { setConfig({ ...config, delimiter: event.target.value }); edited(); }}>
+          <option value=",">Запятая (,)</option><option value=";">Точка с запятой (;)</option><option value={"\t"}>Табуляция</option><option value="|">Вертикальная черта (|)</option>
+          {![",", ";", "\t", "|"].includes(config.delimiter) && <option value={config.delimiter}>Свой: {config.delimiter}</option>}
+        </select></label>
+        <label className="field">Кодировка<select value={config.encoding} onChange={(event) => { setConfig({ ...config, encoding: event.target.value as CsvConfig["encoding"] }); edited(); }}>
+          <option value="utf-8">UTF-8</option><option value="utf-8-sig">UTF-8 с BOM</option><option value="cp1251">Windows-1251</option>
+        </select></label>
+      </div>
+      {config.columns.map((column, index) => <fieldset key={index} className="form">
+        <legend>Колонка {index + 1}</legend>
+        <label className="field">Название в исходном CSV<input required maxLength={200} value={column.source} onChange={(event) => updateColumn(index, { source: event.target.value })} /></label>
+        <label className="field">Название в результате<input required maxLength={200} value={column.target} onChange={(event) => updateColumn(index, { target: event.target.value })} /></label>
+        <label className="field">Тип<select value={column.type} onChange={(event) => updateColumn(index, { type: event.target.value as CsvColumn["type"], min_value: null, max_value: null })}>
+          <option value="text">Текст</option><option value="integer">Целое число</option><option value="decimal">Десятичное число</option>
+        </select></label>
+        <label><input type="checkbox" checked={column.required} onChange={(event) => updateColumn(index, { required: event.target.checked })} /> Обязательное значение</label>
+        <label><input type="checkbox" checked={column.trim} onChange={(event) => updateColumn(index, { trim: event.target.checked })} /> Убирать пробелы по краям</label>
+        {column.type !== "text" && <div className="config-options">
+          <label className="field">Минимум<input inputMode="decimal" value={column.min_value ?? ""} onChange={(event) => updateColumn(index, { min_value: event.target.value || null })} /></label>
+          <label className="field">Максимум<input inputMode="decimal" value={column.max_value ?? ""} onChange={(event) => updateColumn(index, { max_value: event.target.value || null })} /></label>
+        </div>}
         <div className="actions">
-          <input ref={fileInput} className="sr-only" id="config-file" type="file" accept=".json,application/json" aria-label="JSON-конфиг" tabIndex={-1} onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadJson(file); }} />
-          <button className="button secondary small" type="button" onClick={() => fileInput.current?.click()}>Выбрать JSON-конфиг</button>
-          {saved && <button className="button secondary small" type="button" onClick={downloadSaved}>Скачать сохранённый JSON</button>}
-          {saved && dirty && <button className="button secondary small" type="button" onClick={() => apply(saved.config_data, "saved", true)}>Отменить изменения</button>}
+          <button className="button secondary small" type="button" disabled={index === 0} onClick={() => {
+            const columns = [...config.columns]; [columns[index - 1], columns[index]] = [columns[index], columns[index - 1]];
+            setConfig({ ...config, columns }); edited();
+          }}>Выше</button>
+          <button className="button secondary small" type="button" disabled={config.columns.length === 1} onClick={() => { setConfig({ ...config, columns: config.columns.filter((_, i) => i !== index) }); edited(); }}>Удалить колонку</button>
         </div>
-        <div className="config-options">
-          <label className="field">Разделитель
-            <select value={config.delimiter} onChange={(event) => { setConfig({ ...config, delimiter: event.target.value }); edited(); }}>
-              <option value=",">Запятая (,)</option><option value=";">Точка с запятой (;)</option><option value={"\t"}>Табуляция</option><option value="|">Вертикальная черта (|)</option>
-              {![",", ";", "\t", "|"].includes(config.delimiter) && <option value={config.delimiter}>Свой: {config.delimiter}</option>}
-            </select>
-          </label>
-          <label className="field">Кодировка
-            <select value={config.encoding} onChange={(event) => { setConfig({ ...config, encoding: event.target.value as CsvConfig["encoding"] }); edited(); }}>
-              <option value="utf-8">UTF-8</option><option value="utf-8-sig">UTF-8 с BOM</option><option value="cp1251">Windows-1251</option>
-            </select>
-          </label>
-        </div>
-        <p className="hint">Введите точные названия колонок из первой строки CSV.</p>
-        {targets.map((target, index) => <label className="field" key={target}>{targetLabels[target]}
-          <input required maxLength={200} name={`source_${target}`} value={sources[index]} onChange={(event) => { setSources(sources.map((source, i) => i === index ? event.target.value : source)); edited(); }} />
-        </label>)}
-        <button className="button" type="submit">{busy ? "Сохраняем…" : "Сохранить конфиг"}</button>
-      </fieldset>
-    </form>
+      </fieldset>)}
+      <button className="button secondary small" type="button" disabled={config.columns.length >= 200} onClick={() => { setConfig({ ...config, columns: [...config.columns, blankColumn()] }); edited(); }}>Добавить колонку</button>
+      <button className="button" type="submit">{busy ? "Сохраняем…" : "Сохранить конфигурацию"}</button>
+    </fieldset></form>
   </section>;
 }

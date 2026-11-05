@@ -2,15 +2,18 @@ import asyncio
 
 import pytest
 
+from src.schemas.import_config import CsvConfig
 from tests.test_supplier_api import authenticated_client
 from tests.test_supplier_api import signing_key as signing_key
 
 pytestmark = pytest.mark.integration
-CONFIG = {
-    "delimiter": ";",
-    "encoding": "cp1251",
-    "column_mapping": {"Код": "sku", "Товар": "name", "Цена": "price"},
-}
+CONFIG = CsvConfig.model_validate(
+    {
+        "delimiter": ";",
+        "encoding": "cp1251",
+        "column_mapping": {"Код": "sku", "Товар": "name", "Цена": "price"},
+    }
+).model_dump(mode="json")
 
 
 def test_config_create_versions_and_ownership(database_url, monkeypatch, signing_key):
@@ -174,11 +177,11 @@ def test_config_defaults_and_normalized_roundtrip(database_url, monkeypatch, sig
             }
             saved = await client.put(path, headers=owner, json=body)
             assert saved.status_code == 200, saved.text
-            assert saved.json()["config_data"] == {
-                "delimiter": ",",
-                "encoding": "utf-8",
-                "column_mapping": {"SKU": "sku", "Name": "name", "Price": "price"},
-            }
+            assert saved.json()["config_data"] == CsvConfig.model_validate(
+                {
+                    "column_mapping": {"SKU": "sku", "Name": "name", "Price": "price"},
+                }
+            ).model_dump(mode="json")
             assert (await client.get(path, headers=owner)).json() == saved.json()
             # Sending the same full document again must preserve the resource ID.
             again = await client.put(

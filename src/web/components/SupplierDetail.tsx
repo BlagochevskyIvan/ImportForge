@@ -14,7 +14,7 @@ function SupplierWorkspace({ supplierId }: { supplierId: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
-  const [ready, setReady] = useState(false);
+  const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
   const [filesRevision, setFilesRevision] = useState(0);
 
   useEffect(() => {
@@ -23,7 +23,7 @@ function SupplierWorkspace({ supplierId }: { supplierId: number }) {
       .then(([supplier, config]) => {
         if (!active) return;
         setData({ supplier, config });
-        setReady(Boolean(config));
+        setSelectedConfigId(config?.id ?? null);
       })
       .catch((cause) => { if (active) setError(describeError(cause)); })
       .finally(() => { if (active) setLoading(false); });
@@ -36,10 +36,10 @@ function SupplierWorkspace({ supplierId }: { supplierId: number }) {
   return <>
     <div className="dashboard-title"><div><p className="eyebrow"><span className="dot" /> Поставщик · ID {data.supplier.id}</p><h1>{data.supplier.name}</h1><p className="muted">{data.supplier.contact_email}</p></div><span className={`badge${data.supplier.is_active ? "" : " inactive"}`}>{data.supplier.is_active ? "Активен" : "Неактивен"}</span></div>
     <div className="supplier-workspace">
-      <SupplierConfigForm supplierId={supplierId} initialConfig={data.config} onReadyChange={setReady} />
-      <CsvUpload supplierId={supplierId} configReady={ready} onUploaded={() => setFilesRevision((value) => value + 1)} />
+      <SupplierConfigForm supplierId={supplierId} initialConfig={data.config} onReadyChange={(config) => setSelectedConfigId(config?.id ?? null)} />
+      <CsvUpload supplierId={supplierId} onUploaded={() => setFilesRevision((value) => value + 1)} />
     </div>
-    <CsvProcessing supplierId={supplierId} revision={filesRevision} />
+    <CsvProcessing supplierId={supplierId} revision={filesRevision} configId={selectedConfigId} />
   </>;
 }
 

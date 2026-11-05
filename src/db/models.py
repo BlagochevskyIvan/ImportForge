@@ -1,7 +1,20 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Uuid, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column
 
@@ -44,6 +57,7 @@ class ImportConfig(Base):
         index=True,
     )
     config_data = Column(JSONB, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), default="Основная", server_default="Основная")
 
 
 class SourceFile(Base):
@@ -72,8 +86,22 @@ class SourceFile(Base):
         server_default=func.now(),
     )
 
+
 class ImportRun(Base):
     __tablename__ = "import_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'retry_wait', 'completed', 'failed')",
+            name="ck_import_runs_status",
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_import_runs_attempt_count"),
+        Index(
+            "uq_import_runs_active_file",
+            "source_file_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'processing', 'retry_wait')"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
@@ -82,16 +110,24 @@ class ImportRun(Base):
     )
 
     source_file_id: Mapped[UUID] = mapped_column(
-        ForeignKey("source_files.id", ondelete="CASCADE"),
+        ForeignKey("source_files.id", ondelete="RESTRICT"),
         index=True,
     )
 
+    config_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_configs.id", ondelete="SET NULL"),
+        index=True,
+    )
+    config_name: Mapped[str] = mapped_column(String(200))
+    config_data: Mapped[dict] = mapped_column(JSONB)
+
     status: Mapped[str] = mapped_column(
         String(30),
-        default="pending",
+        default="queued",
+        server_default="queued",
     )
 
-    сreated_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
     )
@@ -109,7 +145,10 @@ class ImportRun(Base):
     attempt_count: Mapped[int] = mapped_column(
         Integer,
         default=0,
+        server_default=text("0"),
     )
+
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     error_code: Mapped[str | None] = mapped_column(
         String(100),
@@ -117,7 +156,7 @@ class ImportRun(Base):
     )
 
     error_message: Mapped[str | None] = mapped_column(
-        String(1024),
+        Text,
         nullable=True,
     )
 
